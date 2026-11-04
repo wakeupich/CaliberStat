@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
     QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMainWindow, QMessageBox, QProgressDialog, QPushButton, QScrollArea,
-    QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
+    QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
     QVBoxLayout, QWidget,
 )
 
@@ -242,16 +242,25 @@ def result_text(match) -> str:
 # Карточка игрока в бою
 # ---------------------------------------------------------------------------
 class PlayerCardDialog(QDialog):
-    """Подробности одного игрока: снаряжение, навыки, награды."""
+    """Карточка игрока в бою: всё разложено по вкладкам и тянется по окну.
+
+    Раньше это была одна длинная лента со скроллом — читать неудобно. Теперь
+    пять вкладок: бой, снаряжение, навыки, прокачка, награды. Таблицы
+    растягиваются вместе с окном, внешнего скролла нет.
+    """
 
     def __init__(self, parent, match: dict, player: dict):
         super().__init__(parent)
+        self.match = match
+        self.player = player
         self.setWindowTitle(f"{player.get('nick') or 'игрок'} — карточка боя")
-        self.resize(900, 1100)
+        self.resize(900, 680)
+        self.setMinimumSize(720, 460)
         self.setStyleSheet(STYLE)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 14, 16, 14)
+        outer.setContentsMargins(16, 14, 16, 12)
+        outer.setSpacing(6)
 
         head = QLabel(f"{player.get('nick') or '—'}")
         head.setObjectName("h1")
@@ -263,22 +272,70 @@ class PlayerCardDialog(QDialog):
         sub.setObjectName("dim")
         outer.addWidget(sub)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        body = QWidget()
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(0, 8, 0, 0)
-        layout.setSpacing(8)
-        scroll.setWidget(body)
-        outer.addWidget(scroll, 1)
-        self.scroll = scroll
+        self.tabs = QTabWidget()
+        outer.addWidget(self.tabs, 1)
+        self.tabs.addTab(self._battle_tab(), "Бой")
+        self.tabs.addTab(self._gear_tab(), "Снаряжение")
+        self.tabs.addTab(self._perks_tab(), "Навыки")
+        self.tabs.addTab(self._levels_tab(), "Прокачка")
+        self.tabs.addTab(self._rewards_tab(), "Награды")
 
-        # -- телеметрия ---------------------------------------------------
-        layout.addWidget(section_title("Бой"))
-        stats = make_table(["Показатель", "Значение"])
-        stats.setMaximumHeight(190)
-        fill_table(stats, [
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(self.accept)
+        buttons.addWidget(close)
+        outer.addLayout(buttons)
+
+    # -- общие помощники ------------------------------------------------
+    @staticmethod
+    def _note(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setObjectName("dim")
+        return label
+
+    @staticmethod
+    def _table(headers: list[str], rows: list[list], right: tuple[int, ...] = (),
+               wrap: bool = False, fill: bool = False) -> QTableWidget:
+        """Таблица вкладки.
+
+        `fill=True` — растянуть по всей вкладке (длинные списки вроде прокачки);
+        иначе высота подгоняется под содержимое, чтобы под короткой таблицей
+        не висело пустое поле и не появлялось лишних полос прокрутки.
+        """
+        table = make_table(headers)
+        table.setWordWrap(wrap)
+        if wrap:
+            table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        fill_table(table, rows, right=right)
+        if fill:
+            table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            if wrap:
+                table.resizeRowsToContents()
+        else:
+            table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+            table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            if wrap:
+                table.resizeRowsToContents()
+            height = table.horizontalHeader().height() + 4
+            for row in range(table.rowCount()):
+                height += table.rowHeight(row)
+            table.setFixedHeight(height + 4)
+        return table
+
+    def _page(self) -> tuple[QWidget, QVBoxLayout]:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+        return page, layout
+
+    # -- вкладки --------------------------------------------------------
+    def _battle_tab(self) -> QWidget:
+        player = self.player
+        page, layout = self._page()
+        layout.addWidget(self._table(["Показатель", "Значение"], [
             ["Убийства игроков", player.get("kills") or 0],
             ["Убийства ботов", player.get("bot_kills") or 0],
             ["Смерти", player.get("deaths") or 0],
@@ -291,136 +348,113 @@ class PlayerCardDialog(QDialog):
                                              player.get("body_hits"))],
             ["Попаданий в тело", int(player.get("body_hits") or 0)],
             ["Вышел из боя", "да" if player.get("first_leave") else "нет"],
-        ], right=(1,))
-        layout.addWidget(stats)
+        ], right=(1,)))
+        layout.addStretch(1)
+        return page
 
-        # -- снаряжение ---------------------------------------------------
-        loadout = db_loadout(parent, match.get("id"), player.get("uid"))
-        layout.addWidget(section_title("Снаряжение"))
-        if loadout:
-            weapons = loadout.get("weapons") or {}
-            table = make_table(["Слот", "Оружие", "Модули", "Скин"])
-            table.setMinimumHeight(120)
-            rows = []
-            for slot, info in weapons.items():
-                rows.append([
-                    replay_slot_title(slot),
-                    refs().item(info.get("key")),
-                    ", ".join(refs().item(m) for m in (info.get("modules") or [])) or "—",
-                    skin_title(info.get("skin")),
-                ])
-            if rows:
-                fill_table(table, rows)
-                layout.addWidget(table)
-            else:
-                layout.addWidget(self._note("в реплее не было стволов"))
-            extra = []
-            if loadout.get("consumables"):
-                extra.append("Расходники: " + ", ".join(
-                    refs().item(c) for c in loadout["consumables"]))
-            if loadout.get("skins"):
-                extra.append("Комплект: " + ", ".join(
-                    skin_title(s) for s in loadout["skins"]))
-            if loadout.get("fatality"):
-                extra.append("Казнь: " + refs().animation(loadout["fatality"]))
-            if extra:
-                note = self._note("\n".join(extra))
-                layout.addWidget(note)
-        else:
+    def _gear_tab(self) -> QWidget:
+        page, layout = self._page()
+        loadout = db_loadout(self, self.match.get("id"), self.player.get("uid"))
+        if not loadout:
             layout.addWidget(self._note(
-                "Снаряжение есть только в реплее. Этого боя реплей не найден — "
+                "Снаряжение есть только в реплее. Реплей этого боя не найден — "
                 "залей его кнопкой «Перечитать реплеи»."))
+            layout.addStretch(1)
+            return page
 
-        # -- навыки -------------------------------------------------------
+        rows = [[replay_slot_title(slot), refs().item(info.get("key")),
+                 ", ".join(refs().item(m) for m in (info.get("modules") or [])) or "—",
+                 skin_title(info.get("skin"))]
+                for slot, info in (loadout.get("weapons") or {}).items()]
+        layout.addWidget(self._table(["Слот", "Оружие", "Модули", "Скин"], rows))
+        layout.addStretch(1)
+
+        extra = []
+        if loadout.get("consumables"):
+            extra.append("Расходники: " + ", ".join(
+                refs().item(c) for c in loadout["consumables"]))
+        if loadout.get("skins"):
+            extra.append("Комплект: " + skins_summary(loadout["skins"]))
+        if loadout.get("fatality"):
+            extra.append("Казнь: " + refs().animation(loadout["fatality"]))
+        if extra:
+            layout.addWidget(self._note("\n".join(extra)))
+        return page
+
+    def _perks_tab(self) -> QWidget:
+        page, layout = self._page()
+        loadout = db_loadout(self, self.match.get("id"), self.player.get("uid"))
         perks = (loadout or {}).get("perks") or []
         levels = (loadout or {}).get("perk_levels") or {}
-        layout.addWidget(section_title("Навыки в бой"))
-        if perks:
-            table = make_table(["Навык", "Уровень"])
-            table.setMaximumHeight(150)
-            fill_table(table, [[refs().item(p), levels.get(p, "—")] for p in perks],
-                       right=(1,))
-            layout.addWidget(table)
-        else:
-            layout.addWidget(self._note("навыки не сохранились (нет реплея)"))
+        if not perks:
+            layout.addWidget(self._note("Навыки не сохранились: нужен реплей этого боя."))
+            layout.addStretch(1)
+            return page
+        table = self._table(["Навык", "Уровень"],
+                            [[refs().item(p), levels.get(p, "—")] for p in perks],
+                            right=(1,))
+        layout.addWidget(table)
+        layout.addStretch(1)
+        layout.addWidget(self._note(
+            f"Взято в бой: {len(perks)}. Уровни 1–2 — ступень прокачки навыка."))
+        return page
 
-        # -- дерево прокачки оперативника ---------------------------------
-        code = player.get("operator_code")
+    def _levels_tab(self) -> QWidget:
+        page, layout = self._page()
+        code = self.player.get("operator_code")
         levels_map = refs().operator_levels(code) if code else {}
-        my_level = player.get("card_level") or 0
-        if levels_map:
-            layout.addWidget(section_title(
-                f"Прокачка оперативника: {refs().operator(code)} — что на каком уровне"))
-            table = make_table(["Уровень", "Что открывается"])
-            rows = []
-            for level in sorted(levels_map):
-                parts = []
-                for node in levels_map[level]:
-                    text = node["name"] or ""
-                    if node["effect"]:
-                        text += f" {node['effect']}"
-                    parts.append(text or node["key"])
-                rows.append([f"{level}" + (" ✓" if my_level and level <= my_level else ""),
-                             "; ".join(parts)])
-            fill_table(table, rows, right=(0,))
-            for row, level in enumerate(sorted(levels_map)):
-                opened = my_level and level <= my_level
-                for column in (0, 1):
-                    item = table.item(row, column)
-                    if item:
-                        item.setForeground(QColor(ACCENT if opened else DIM))
-            table.setFixedHeight(min(20 * len(rows) + 40, 420))
-            layout.addWidget(table)
+        if not levels_map:
             layout.addWidget(self._note(
-                f"Галочкой отмечены уровни, которые у него уже есть "
-                f"(текущий: {my_level or '—'}). Названия узлов — из клиента, "
-                f"числа — из описания улучшения."))
+                "Нет данных о прокачке: обнови справочники из клиента "
+                "и залей реплей этого боя."))
+            layout.addStretch(1)
+            return page
+        my_level = self.player.get("card_level") or 0
+        rows = []
+        for level in sorted(levels_map):
+            parts = []
+            for node in levels_map[level]:
+                text = node["name"] or ""
+                if node["effect"]:
+                    text += f" {node['effect']}"
+                parts.append(text or node["key"])
+            rows.append([f"{level}" + (" ✓" if my_level and level <= my_level else ""),
+                         "; ".join(parts)])
+        layout.addWidget(self._table(["Уровень", "Что открывается"], rows,
+                                     right=(0,), wrap=True), 1)
+        layout.addWidget(self._note(
+            f"Галочкой отмечены уровни, которые у него уже есть "
+            f"(текущий: {my_level or '—'}). Названия узлов и числа — из клиента."))
+        return page
 
-        # -- награды ------------------------------------------------------
-        rewards = parent_rewards(parent, match.get("id"), player.get("uid"))
-        layout.addWidget(section_title("Награды за бой"))
-        table = make_table(["Что", "Сколько"])
-        table.setMaximumHeight(190)
-        fill_table(table, [
+    def _rewards_tab(self) -> QWidget:
+        page, layout = self._page()
+        rewards = parent_rewards(self, self.match.get("id"), self.player.get("uid"))
+        layout.addWidget(self._table(["Что", "Сколько"], [
             ["Опыт за бой", rewards.get("match_xp") or 0],
             ["Опыт за ленты", rewards.get("ribbon_xp") or 0],
             ["Опыт за медали", rewards.get("medal_xp") or 0],
             ["Опыт оперативника", rewards.get("card_xp") or 0],
             ["Боевой пропуск", rewards.get("battlepass_base") or 0],
-        ], right=(1,))
-        layout.addWidget(table)
+        ], right=(1,)))
+        layout.addStretch(1)
 
         medals = rewards.get("medals_json")
+        text = ""
         if medals:
-            text = str(medals)
             try:
                 data = json.loads(medals)
                 if isinstance(data, dict):
                     text = ", ".join(f"{refs().medal(code)} ×{count}"
                                      for code, count in data.items())
             except Exception:
-                pass
-            if text and text not in ("{}", "[]"):
-                layout.addWidget(self._note(f"Медали: {text}"))
-
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
-        close = QPushButton("Закрыть")
-        close.clicked.connect(self.accept)
-        buttons.addWidget(close)
-        outer.addLayout(buttons)
-
-    @staticmethod
-    def _note(text: str) -> QLabel:
-        label = QLabel(text)
-        label.setWordWrap(True)
-        label.setObjectName("dim")
-        return label
+                text = str(medals)
+        layout.addWidget(self._note("Медали: " + text if text else "Медалей за бой нет."))
+        return page
 
     def scroll_to_end(self) -> None:
-        """Прокрутить карточку вниз (для снимков и проверок)."""
-        bar = self.scroll.verticalScrollBar()
-        bar.setValue(bar.maximum())
+        """Совместимость с ключом --bottom: вкладки прокручивать не нужно."""
+        return None
 
 
 def head_cell(head, body) -> str:
@@ -432,6 +466,24 @@ def head_cell(head, body) -> str:
         return "—"
     share = 100.0 * head / total
     return f"{head} ({share:.1f}%)".replace(".", ",")
+
+
+SKIN_SLOTS = {"Head": "голова", "Suit": "костюм", "Gear": "снаряжение",
+              "Model": "модель", "WeaponPrimary": "оружие", "WeaponSecondary": "оружие 2"}
+
+
+def skins_summary(skins) -> str:
+    """Комплект без повторов: один образ на голову, костюм и снаряжение — одна строка."""
+    groups: dict[str, list[str]] = {}
+    for key in skins or []:
+        parts = str(key).rsplit("_", 1)
+        slot = SKIN_SLOTS.get(parts[1]) if len(parts) == 2 else None
+        groups.setdefault(skin_title(key), []).append(slot or "")
+    out = []
+    for name, slots in groups.items():
+        real = [slot for slot in slots if slot]
+        out.append(f"{name} — {', '.join(real)}" if real else name)
+    return ", ".join(out)
 
 
 def replay_slot_title(slot: str) -> str:
@@ -1083,6 +1135,7 @@ def main() -> int:
     ap.add_argument("--card", help="сохранить снимок карточки игрока и выйти")
     ap.add_argument("--bottom", action="store_true",
                     help="для --card: прокрутить карточку вниз (дерево навыков)")
+    ap.add_argument("--card-tab", help="для --card: какую вкладку открыть")
     args = ap.parse_args()
 
     paths.ensure_dirs()
@@ -1104,6 +1157,12 @@ def main() -> int:
             app.processEvents()
             if args.bottom:
                 dialog.scroll_to_end()
+                app.processEvents()
+            if args.card_tab:
+                for index in range(dialog.tabs.count()):
+                    if dialog.tabs.tabText(index).lower() == args.card_tab.lower():
+                        dialog.tabs.setCurrentIndex(index)
+                        break
                 app.processEvents()
 
             def finish() -> None:
