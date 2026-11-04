@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 APP_TITLE = "CaliberStat"
-VERSION = "0.1.4"
+VERSION = "0.1.5"
 
 SETTINGS_NAME = "settings.json"
 DB_NAME = "caliberstat.db"
@@ -73,6 +73,8 @@ DEFAULT_SETTINGS = {
     "autostart": False,
     "collect_on_start": True,
     "import_replays_auto": True,
+    # всплывающие сообщения трея: в бою они мешают, поэтому их можно выключить
+    "notifications": True,
     "last_account_uid": 0,
     "window": {"w": 1280, "h": 820},
 }

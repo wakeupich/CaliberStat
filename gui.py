@@ -946,6 +946,14 @@ class Hub(QMainWindow):
         self.autostart_box.setToolTip("Запускает трей со сбором и подхватом реплеев")
         self.autostart_box.stateChanged.connect(self._toggle_autostart)
         services.addWidget(self.autostart_box)
+
+        self.notify_box = QCheckBox("Всплывающие уведомления")
+        self.notify_box.setChecked(bool(self.settings.get("notifications", True)))
+        self.notify_box.setToolTip(
+            "Сообщения трея «новый бой» и другие. В бою они мешают — "
+            "сними галочку, и они больше не появятся")
+        self.notify_box.stateChanged.connect(self._toggle_notifications)
+        services.addWidget(self.notify_box)
         services.addStretch(1)
         layout.addLayout(services)
         layout.addStretch(1)
@@ -1192,9 +1200,12 @@ class Hub(QMainWindow):
                                     for name, ok in checks.items()))
 
     def _save_settings(self) -> None:
-        self.settings["log_path"] = self.log_edit.text().strip()
-        self.settings["game_dir"] = self.game_edit.text().strip()
-        self.settings["replays_dir"] = self.replays_edit.text().strip()
+        # берём актуальные настройки с диска: их меняет и трей (уведомления)
+        cfg = paths.load_settings()
+        cfg["log_path"] = self.log_edit.text().strip()
+        cfg["game_dir"] = self.game_edit.text().strip()
+        cfg["replays_dir"] = self.replays_edit.text().strip()
+        self.settings = cfg
         if paths.save_settings(self.settings):
             self.watcher = None
             self._load_settings_into_fields()
@@ -1242,6 +1253,15 @@ class Hub(QMainWindow):
         self.settings["import_replays_auto"] = self.auto_replays_box.isChecked()
         paths.save_settings(self.settings)
         self.watcher = None
+
+    def _toggle_notifications(self, _state: int = 0) -> None:
+        """Включить/выключить всплывающие сообщения трея (в бою они мешают)."""
+        cfg = paths.load_settings()
+        cfg["notifications"] = bool(self.notify_box.isChecked())
+        self.settings["notifications"] = cfg["notifications"]
+        paths.save_settings(cfg)
+        self.status.setText("уведомления " +
+                            ("включены" if cfg["notifications"] else "выключены"))
 
     def _toggle_autostart(self, _state: int = 0) -> None:
         wanted = self.autostart_box.isChecked()

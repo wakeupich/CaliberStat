@@ -85,6 +85,15 @@ class App:
         self.autostart_action.triggered.connect(self.toggle_autostart)
         self.menu.addAction(self.autostart_action)
 
+        self.notify_action = QAction("Всплывающие уведомления", self.menu)
+        self.notify_action.setCheckable(True)
+        self.notify_action.setChecked(bool(self.settings.get("notifications", True)))
+        self.notify_action.setToolTip(
+            "Сообщения «новый бой» и прочие всплывашки. В бою они мешают — "
+            "сними галочку и они больше не появятся")
+        self.notify_action.triggered.connect(self.toggle_notifications)
+        self.menu.addAction(self.notify_action)
+
         self.menu.addSeparator()
         folder_action = QAction("Папка программы", self.menu)
         folder_action.triggered.connect(
@@ -139,6 +148,29 @@ class App:
         else:
             self.start_collect()
 
+    # -- уведомления ---------------------------------------------------
+    def notifications_on(self) -> bool:
+        """Включены ли всплывающие сообщения. Читаем с диска: их можно
+        переключить и в окне программы, а трей должен это увидеть сразу."""
+        try:
+            return bool(paths.load_settings().get("notifications", True))
+        except Exception:
+            return True
+
+    def notify(self, title: str, message: str, msecs: int = 4000) -> None:
+        """Показать сообщение, если уведомления не отключены."""
+        if self.notifications_on():
+            self.tray.showMessage(title, message, QSystemTrayIcon.Information, msecs)
+
+    def toggle_notifications(self) -> None:
+        cfg = paths.load_settings()
+        cfg["notifications"] = bool(self.notify_action.isChecked())
+        paths.save_settings(cfg)
+        self.notify_action.setChecked(cfg["notifications"])
+        # о самом переключении сообщаем только когда их включают, иначе смысла нет
+        if cfg["notifications"]:
+            self.notify("Уведомления", "включены", 3000)
+
     # -- реплеи --------------------------------------------------------
     def rescan_replays(self) -> None:
         try:
@@ -146,7 +178,7 @@ class App:
             message = replays_mod.summary_text(stats)
         except Exception as e:
             message = f"не удалось: {e}"
-        self.tray.showMessage("Реплеи", message, QSystemTrayIcon.Information, 6000)
+        self.notify("Реплеи", message, 6000)
         self.watcher = replays_mod.Watcher(
             self.con, replays_mod.default_folders(self.settings))
         self.tick()
@@ -168,10 +200,7 @@ class App:
         ok = paths.set_autostart(wanted)
         self.autostart_action.setChecked(paths.autostart_enabled() if ok else not wanted)
         if ok:
-            self.tray.showMessage(
-                "Автозапуск",
-                "включён" if wanted else "выключен",
-                QSystemTrayIcon.Information, 4000)
+            self.notify("Автозапуск", "включён" if wanted else "выключен", 4000)
 
     def _update_tooltip(self) -> None:
         collected = self.collector.stats if self.collector else {}
@@ -183,13 +212,14 @@ class App:
 
     def tick(self) -> None:
         try:
+            # галочку в меню могли снять и в окне программы — держим в согласии
+            if self.notify_action.isChecked() != self.notifications_on():
+                self.notify_action.setChecked(self.notifications_on())
             picked = self.watcher.step()
             if picked:
                 self.last_import = picked[-1]["file"]
-                self.tray.showMessage(
-                    "Новый бой",
-                    f"подхвачен реплей: {self.last_import}",
-                    QSystemTrayIcon.Information, 4000)
+                self.notify("Новый бой",
+                            f"подхвачен реплей: {self.last_import}", 4000)
             if self.collector and not (self.thread and self.thread.is_alive()):
                 self.status_action.setText("сбор завершился — перезапускаю")
                 self.start_collect()
