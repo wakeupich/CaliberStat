@@ -160,6 +160,16 @@ def import_replay(con, path: str, codes: Optional[dict[str, str]] = None) -> Opt
     data = read_payload(path)
     if not data:
         return None
+    return import_payload(con, data, path=path, codes=codes)
+
+
+def import_payload(con, data: dict, path: Optional[str] = None,
+                   codes: Optional[dict[str, str]] = None) -> Optional[str]:
+    """Заливает уже прочитанный протокол боя.
+
+    Отдельно от `import_replay`, чтобы при пачке файлов читать каждый файл
+    ровно один раз: протокол боя весит мегабайты.
+    """
     match_id = db.save_match(con, data, source="replay")
     if not match_id:
         return None
@@ -169,7 +179,8 @@ def import_replay(con, path: str, codes: Optional[dict[str, str]] = None) -> Opt
         con.execute("UPDATE matches SET f4=?, mode_name=? WHERE id=?",
                     (f4, db.F4_NAMES.get(f4), match_id))
         db.backfill_pve_teams(con)
-    codes = codes or player_codes(path)
+    if path:
+        codes = codes or player_codes(path)
     # снаряжение: в реплее предметы записаны ключами, поэтому имена читаемые
     try:
         for uid, loadout in loadout_of(data).items():
