@@ -335,6 +335,8 @@ def loadout_of(data: dict) -> dict[int, dict]:
             # 8.19 = престиж (0/8/0/0/1/0).
             "card_level": (card or {}).get("18"),
             "prestige": (card or {}).get("19"),
+            # уровень аккаунта игрока — число в белом квадрате на экране боя
+            "account_level": meta.get("3"),
             "weapons": weapons,
             "perks": list((card or {}).get("15") or []),
             # уровни навыков лежат не в карточке, а рядом с игроком (поле 20):

@@ -211,24 +211,23 @@ def role_title(role) -> str:
 
 
 def level_text(player: dict) -> str:
-    """«(уровень 15, престиж 8)» — как нашивка в игре: престиж важнее уровня."""
+    """«(оперативник 15, престиж 1, аккаунт 100)» — как нашивки в игре.
+
+    У оперативника 15 уровней, дальше качается престиж: в бою его рисуют
+    жёлтым квадратом вместо чёрного с уровнем. Уровень аккаунта — отдельный
+    счётчик, в бою он в белом квадрате.
+    """
     level = player.get("card_level")
     prestige = player.get("prestige")
+    account = player.get("account_level")
     parts = []
     if level is not None:
-        parts.append(f"уровень {level}")
+        parts.append(f"оперативник {level}")
     if prestige:
         parts.append(f"престиж {prestige}")
+    if account:
+        parts.append(f"аккаунт {account}")
     return f" ({', '.join(parts)})" if parts else ""
-
-
-def level_badge(player: dict) -> str:
-    """Короткая нашивка для таблицы: «15», «8 · престиж» или «—»."""
-    level = player.get("card_level")
-    prestige = player.get("prestige")
-    if prestige:
-        return f"{prestige} · престиж"
-    return str(level) if level is not None else "—"
 
 
 def result_text(match) -> str:
@@ -545,8 +544,8 @@ class Hub(QMainWindow):
         bottom_layout.setSpacing(6)
         bottom_layout.addWidget(section_title("Состав боя"))
         self.roster_table = make_table(
-            ["Роль", "Ник", "Оперативник", "Ур.", "Убийств", "Ботов", "Смертей",
-             "Помощь", "Урон", "Головы", "Снаряжение"])
+            ["Роль", "Ник", "Оперативник", "Опер.", "Прест.", "Акк.", "Убийств",
+             "Ботов", "Смертей", "Помощь", "Урон", "Головы", "Снаряжение"])
         self.roster_table.doubleClicked.connect(self._open_player_card)
         bottom_layout.addWidget(self.roster_table)
         splitter.addWidget(bottom)
@@ -784,12 +783,14 @@ class Hub(QMainWindow):
             rows.append([
                 role_title(player["role"]), player["nick"] or "—",
                 refs().operator(player.get("operator_code")),
-                level_badge(player),
+                player.get("card_level") if player.get("card_level") is not None else "—",
+                player.get("prestige") or "—",
+                player.get("account_level") or "—",
                 player["kills"] or 0, player["bot_kills"] or 0, player["deaths"] or 0,
                 player["assists"] or 0, int(player["damage_dealt"] or 0), head,
                 "есть" if player["has_loadout"] else "—",
             ])
-        fill_table(self.roster_table, rows, right=(3, 4, 5, 6, 7, 8))
+        fill_table(self.roster_table, rows, right=(3, 4, 5, 6, 7, 8, 9, 10, 11))
 
     def _open_match_from_last(self, index) -> None:
         row = index.row()

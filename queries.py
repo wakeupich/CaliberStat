@@ -203,18 +203,20 @@ def match_players(con: sqlite3.Connection, match_id: str) -> list[dict]:
         data = dict(row)
         raw = data.pop("loadout_json", None)
         code = None
-        level = prestige = None
+        level = prestige = account_level = None
         if raw:
             try:
                 loadout = json.loads(raw) or {}
                 code = loadout.get("operator")
                 level = loadout.get("card_level")
                 prestige = loadout.get("prestige")
+                account_level = loadout.get("account_level")
             except Exception:
                 code = None
         data["operator_code"] = code
         data["card_level"] = level
         data["prestige"] = prestige
+        data["account_level"] = account_level
         data["has_loadout"] = 1 if raw else 0
         out.append(data)
     return out
