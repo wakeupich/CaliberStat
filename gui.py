@@ -210,6 +210,27 @@ def role_title(role) -> str:
     return db.role_ru(role) or "—"
 
 
+def level_text(player: dict) -> str:
+    """«(уровень 15, престиж 8)» — как нашивка в игре: престиж важнее уровня."""
+    level = player.get("card_level")
+    prestige = player.get("prestige")
+    parts = []
+    if level is not None:
+        parts.append(f"уровень {level}")
+    if prestige:
+        parts.append(f"престиж {prestige}")
+    return f" ({', '.join(parts)})" if parts else ""
+
+
+def level_badge(player: dict) -> str:
+    """Короткая нашивка для таблицы: «15», «8 · престиж» или «—»."""
+    level = player.get("card_level")
+    prestige = player.get("prestige")
+    if prestige:
+        return f"{prestige} · престиж"
+    return str(level) if level is not None else "—"
+
+
 def result_text(match) -> str:
     win = q.result_of(match)
     if win is None:
@@ -236,7 +257,8 @@ class PlayerCardDialog(QDialog):
         head.setObjectName("h1")
         outer.addWidget(head)
         sub = QLabel(f"{role_title(player.get('role'))} · "
-                     f"оперативник: {refs().operator(player.get('operator_code'))} · "
+                     f"оперативник: {refs().operator(player.get('operator_code'))}"
+                     f"{level_text(player)} · "
                      f"{map_title(match)} · {q.fmt_dt(q.start_ts(match))}")
         sub.setObjectName("dim")
         outer.addWidget(sub)
@@ -523,7 +545,7 @@ class Hub(QMainWindow):
         bottom_layout.setSpacing(6)
         bottom_layout.addWidget(section_title("Состав боя"))
         self.roster_table = make_table(
-            ["Роль", "Ник", "Оперативник", "Убийств", "Ботов", "Смертей",
+            ["Роль", "Ник", "Оперативник", "Ур.", "Убийств", "Ботов", "Смертей",
              "Помощь", "Урон", "Головы", "Снаряжение"])
         self.roster_table.doubleClicked.connect(self._open_player_card)
         bottom_layout.addWidget(self.roster_table)
@@ -762,6 +784,7 @@ class Hub(QMainWindow):
             rows.append([
                 role_title(player["role"]), player["nick"] or "—",
                 refs().operator(player.get("operator_code")),
+                level_badge(player),
                 player["kills"] or 0, player["bot_kills"] or 0, player["deaths"] or 0,
                 player["assists"] or 0, int(player["damage_dealt"] or 0), head,
                 "есть" if player["has_loadout"] else "—",
