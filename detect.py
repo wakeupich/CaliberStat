@@ -6,7 +6,7 @@
 
 * лог — стандартный путь Unity-игры `%USERPROFILE%\\AppData\\LocalLow\\1CGS\\Caliber\\Player.log`;
 * папка клиента — берётся из самого лога, строка `Command line: <путь>\\Caliber.exe`
-  (проверено на живом клиенте: `D:\\Games\\Caliber\\Game\\Caliber.exe`);
+  (путь берётся из строки запуска в самом логе);
 * реплеи — `<LocalLow>\\1CGS\\Caliber\\Replays` либо `CustomSaveRaplaysDirectory`
   из `replays.json`, если игрок задал свою папку.
 
