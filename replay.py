@@ -155,6 +155,21 @@ def describe(data: dict, codes: Optional[dict[str, str]] = None) -> dict:
     }
 
 
+# Имя файла реплея: <uuid боя>_<uid игрока>_<дата>_<время>_<номер>_<часть>.bytes
+NAME_UID = re.compile(r"_(\d{3,})_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_")
+
+
+def my_uid_from_path(path: str) -> Optional[int]:
+    """Чей это реплей: uid записавшего берётся из имени файла.
+
+    Проверено на 19 файлах: uid из имени всегда присутствует среди участников
+    боя и совпадает с ником записавшего. Это единственный способ понять «мой
+    бой», когда реплей принесли с другой машины и лога игры рядом нет.
+    """
+    m = NAME_UID.search(os.path.basename(path or ""))
+    return int(m.group(1)) if m else None
+
+
 def import_replay(con, path: str, codes: Optional[dict[str, str]] = None) -> Optional[str]:
     """Заливает реплей в базу. Возвращает id матча (или None)."""
     data = read_payload(path)
@@ -179,6 +194,10 @@ def import_payload(con, data: dict, path: Optional[str] = None,
         con.execute("UPDATE matches SET f4=?, mode_name=? WHERE id=?",
                     (f4, db.F4_NAMES.get(f4), match_id))
         db.backfill_pve_teams(con)
+    else:
+        # режим не опознан: в f4 не должно попасть строкой, иначе в интерфейсе
+        # появится режим с именем вроде «onslaughtextended» вместо числа
+        con.execute("UPDATE matches SET f4=NULL, mode_name=NULL WHERE id=?", (match_id,))
     if path:
         codes = codes or player_codes(path)
     # снаряжение: в реплее предметы записаны ключами, поэтому имена читаемые
@@ -196,7 +215,34 @@ def import_payload(con, data: dict, path: Optional[str] = None,
                 continue
             con.execute("UPDATE match_players SET operator_id=? WHERE match_id=? "
                         "AND nick=?", (op_id, match_id, nick))
+    if path:
+        _apply_my_identity(con, match_id, my_uid_from_path(path), f4,
+                           db.iso_to_epoch(data.get("ResultTime")) or 0.0)
     return match_id
+
+
+def _apply_my_identity(con, match_id: str, uid: Optional[int], f4: Optional[int],
+                       ts: float = 0.0) -> None:
+    """Проставляет «мой» uid и команду, если их ещё нет (реплей без лога игры).
+
+    uid берём из имени файла и только если такой игрок реально есть в бою —
+    иначе лучше пусто, чем чужая статистика.
+    """
+    if not uid:
+        return
+    row = con.execute("SELECT nick, team FROM match_players WHERE match_id=? AND uid=?",
+                      (match_id, int(uid))).fetchone()
+    if not row:
+        return
+    if con.execute("SELECT my_uid FROM matches WHERE id=?", (match_id,)).fetchone()[0]:
+        return          # уже известно из лога — не перебиваем
+    team = row["team"]
+    if team is None and f4 in db.PVE_F4:
+        team = 0
+    con.execute("UPDATE matches SET my_uid=?, my_team=? WHERE id=?",
+                (int(uid), team, match_id))
+    if row["nick"]:
+        db.save_account(con, int(uid), row["nick"], ts)
 
 
 _CATALOG_CACHE: Optional[dict] = None

@@ -98,7 +98,7 @@ def scan(con, folders: Optional[Iterable[Path]] = None,
                     # код оперативника из записей игроков: читаем файл второй раз,
                     # но только маленьким регулярным поиском по нему
                     codes = replay.player_codes(str(path))
-                    replay.import_payload(con, data, path=None, codes=codes)
+                    replay.import_payload(con, data, path=str(path), codes=codes)
                     status = "updated" if existed else "new"
                 stats[status] += 1
         except Exception as e:
