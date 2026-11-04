@@ -282,6 +282,96 @@ def build_items(groups: dict[str, list[str]], data: dict) -> dict[str, dict]:
     return names
 
 
+def build_perk_tree(groups: dict[str, list[str]], data: dict) -> dict[str, dict]:
+    """Дерево навыков оперативника: какая технология в какой ветке и на каком месте.
+
+    В клиенте дерево описано четырьмя ветками (`technology_lines.json`), а порядок
+    внутри ветки — порядком в списке. Координат узлов в файлах нет: игру рисует
+    сетку сама, поэтому дерево показываем ветками, а не картинкой.
+    """
+    lines = data.get("technology_lines.json") or {}
+    tree: dict[str, dict] = {}
+    for line, payload in lines.items():
+        line_name = pick_ru(groups, f"QUARTERS_TECHNOLOGY_LINES_{line.upper()}") or line
+        for pos, tech in enumerate((payload or {}).get("Technologies") or []):
+            descr = pick_ru(groups, f"QUARTERS_TECHNOLOGIES_{tech.upper()}_DESCR")
+            tree[tech] = {"line": line, "line_name": line_name, "pos": pos,
+                          "descr": descr}
+    return tree
+
+
+SLOT_KEY = re.compile(r"^(.+?)_(tree|linear)_slot_(\d+)(?:_(\d+))?$")
+
+
+def _first_sentence(text: Optional[str], limit: int = 70) -> Optional[str]:
+    """Первое предложение описания, укороченное до разумной длины."""
+    if not text:
+        return None
+    head = re.split(r"\.\s", text, maxsplit=1)[0]
+    head = clean_text(head) or None
+    if head and len(head) > limit:
+        head = head[:limit].rstrip(" ,;—-") + "…"
+    return head
+
+
+def upgrade_title(groups: dict[str, list[str]], upgrades: dict, upg_id: str) -> tuple:
+    """Название и числовой эффект узла прокачки оперативника.
+
+    У узла в клиенте есть `visual` (например `extra_HP`), а в локализации —
+    `<VISUAL>_SHORT` (короткое имя) и `UPGRADES_<VISUAL>` (описание). Число
+    берём из `modifiers.ui`: там уже готовое значение для интерфейса (+5 ОЗ,
+    −6 с отката).
+    """
+    info = upgrades.get(upg_id) or {}
+    visual = (info.get("visual") or upg_id).upper()
+    name = pick_ru(groups, f"{visual}_SHORT")
+    if not name:
+        name = _first_sentence(pick_ru(groups, f"UPGRADES_{visual}")) or visual
+    effect = ""
+    ui = ((info.get("modifiers") or {}).get("ui") or {})
+    values = [value for value in ui.values() if isinstance(value, (int, float))]
+    if values:
+        effect = ", ".join(f"{'+' if value > 0 else '−'}{abs(value):g}"
+                           for value in values)
+    return name, effect
+
+
+def build_card_tree(groups: dict[str, list[str]], data: dict,
+                    items: dict) -> dict:
+    """Дерево прокачки оперативника: какой узел на каком уровне открывается.
+
+    `card_level_slots.json` описывает две вещи:
+
+    * `<карта>_tree_slot_<уровень>_<слот>` — узлы прокачки конкретного
+      оперативника (здоровье, скорострельность, улучшения способности);
+    * `<карта>_linear_slot_<уровень>` — общие уровни: `UnlockTechnologySlot`
+      (открывается слот навыка) и выдача конкретных навыков.
+
+    Игра рисует это сеткой с осью 1–15, поэтому и мы показываем по уровням.
+    """
+    slots = data.get("card_level_slots.json") or {}
+    upgrades = data.get("upgrades.json") or {}
+    rows: dict[tuple, dict] = {}
+    for key, value in slots.items():
+        m = SLOT_KEY.match(key)
+        if not m or not isinstance(value, dict):
+            continue
+        card, line, level, slot = m.group(1), m.group(2), int(m.group(3)), int(m.group(4) or 1)
+        for upg in value.get("Upgrades") or []:
+            name, effect = upgrade_title(groups, upgrades, upg)
+            rows[(card, level, slot, upg)] = {"kind": "upgrade", "name": name,
+                                              "effect": effect}
+        for tech in value.get("Technologies") or []:
+            info = items.get(tech) or {}
+            rows[(card, level, slot, tech)] = {"kind": "tech",
+                                               "name": info.get("name") or tech,
+                                               "effect": ""}
+        if value.get("UnlockTechnologySlot"):
+            rows[(card, level, slot, "slot")] = {"kind": "slot",
+                                                 "name": "слот навыка", "effect": ""}
+    return rows
+
+
 def build_medals(groups: dict[str, list[str]]) -> dict[str, str]:
     medals = {}
     for key in groups:
@@ -304,7 +394,9 @@ def build_ribbons(groups: dict[str, list[str]]) -> dict[str, str]:
 
 # -- запись ----------------------------------------------------------------
 def store(con: sqlite3.Connection, maps: dict, operators: dict, items: dict,
-          medals: dict, ribbons: dict, source: str) -> dict:
+          medals: dict, ribbons: dict, source: str,
+          perk_tree: Optional[dict] = None,
+          card_tree: Optional[dict] = None) -> dict:
     """Справочники одной транзакцией: либо всё новое, либо всё старое."""
     con.execute("BEGIN")
     try:
@@ -327,11 +419,24 @@ def store(con: sqlite3.Connection, maps: dict, operators: dict, items: dict,
         con.execute("DELETE FROM ref_ribbon")
         con.executemany("INSERT OR REPLACE INTO ref_ribbon(code, name) VALUES (?,?)",
                         list(ribbons.items()))
+        con.execute("DELETE FROM ref_perk_line")
+        con.executemany(
+            "INSERT OR REPLACE INTO ref_perk_line(technology, line, line_name, pos, "
+            "descr) VALUES (?,?,?,?,?)",
+            [(tech, info["line"], info["line_name"], info["pos"], info["descr"])
+             for tech, info in (perk_tree or {}).items()])
+        con.execute("DELETE FROM ref_card_tree")
+        con.executemany(
+            "INSERT OR REPLACE INTO ref_card_tree(card, level, slot, key, kind, name, "
+            "effect) VALUES (?,?,?,?,?,?,?)",
+            [(card, level, slot, key, info["kind"], info["name"], info["effect"])
+             for (card, level, slot, key), info in (card_tree or {}).items()])
         for key, value in (("updated_at", str(int(time.time()))),
                            ("source", source),
                            ("maps", str(len(maps))),
                            ("operators", str(len(operators))),
-                           ("items", str(len(items)))):
+                           ("items", str(len(items))),
+                           ("perks", str(len(perk_tree or {})))):
             con.execute("INSERT OR REPLACE INTO ref_meta(key, value) VALUES (?,?)",
                         (key, value))
         con.execute("COMMIT")
@@ -339,7 +444,8 @@ def store(con: sqlite3.Connection, maps: dict, operators: dict, items: dict,
         con.execute("ROLLBACK")
         raise
     return {"maps": len(maps), "operators": len(operators), "items": len(items),
-            "medals": len(medals), "ribbons": len(ribbons)}
+            "medals": len(medals), "ribbons": len(ribbons),
+            "perks": len(perk_tree or {}), "card_tree": len(card_tree or {})}
 
 
 def update(con: sqlite3.Connection, cfg: Optional[dict] = None,
@@ -385,13 +491,17 @@ def update(con: sqlite3.Connection, cfg: Optional[dict] = None,
     items = build_items(groups, data)
     medals = build_medals(groups)
     ribbons = build_ribbons(groups)
+    perk_tree = build_perk_tree(groups, data)
+    card_tree = build_card_tree(groups, data, items)
 
     step(5)
     counts = {"maps": len(maps), "operators": len(operators), "items": len(items),
-              "medals": len(medals), "ribbons": len(ribbons)}
+              "medals": len(medals), "ribbons": len(ribbons),
+              "perks": len(perk_tree), "card_tree": len(card_tree)}
     if not dry_run:
         counts = store(con, maps, operators, items, medals, ribbons,
-                       source=f"{Path(static).name} · {Path(assets).parent}")
+                       source=f"{Path(static).name} · {Path(assets).parent}",
+                       perk_tree=perk_tree, card_tree=card_tree)
 
     # чего не хватает: карты из боёв, для которых клиент не дал названия
     missing = []
@@ -413,6 +523,10 @@ def summary_text(counts: dict) -> str:
     text = (f"карт: {counts['maps']}, оперативников: {counts['operators']}, "
             f"предметов и навыков: {counts['items']}, "
             f"медалей: {counts['medals']}, лент: {counts['ribbons']}")
+    if counts.get("perks"):
+        text += f", узлов дерева навыков: {counts['perks']}"
+    if counts.get("card_tree"):
+        text += f", узлов прокачки оперативников: {counts['card_tree']}"
     if counts.get("no_name_operators"):
         text += f"\nбез имени: {len(counts['no_name_operators'])}"
     if counts.get("missing_maps"):

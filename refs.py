@@ -38,6 +38,23 @@ class Refs:
         self.medals = {r[0]: r[1] for r in con.execute("SELECT code, name FROM ref_medal")}
         self.ribbons = {r[0]: r[1] for r in con.execute("SELECT code, name FROM ref_ribbon")}
         self.meta = {r[0]: r[1] for r in con.execute("SELECT key, value FROM ref_meta")}
+        # дерево навыков: ветка -> узлы по порядку
+        self.perk_lines: dict[str, dict] = {}
+        for tech, line, line_name, pos, descr in con.execute(
+                "SELECT technology, line, line_name, pos, descr FROM ref_perk_line"):
+            branch = self.perk_lines.setdefault(line, {"name": line_name or line,
+                                                       "nodes": []})
+            branch["nodes"].append({"tech": tech, "pos": pos or 0, "descr": descr})
+        for branch in self.perk_lines.values():
+            branch["nodes"].sort(key=lambda node: node["pos"])
+        # дерево прокачки оперативника: карта -> уровень -> узлы
+        self.card_tree: dict[str, dict[int, list]] = {}
+        for card, level, slot, key, kind, name, effect in con.execute(
+                "SELECT card, level, slot, key, kind, name, effect FROM ref_card_tree "
+                "ORDER BY level, slot"):
+            self.card_tree.setdefault(card, {}).setdefault(int(level), []).append(
+                {"slot": slot, "key": key, "kind": kind, "name": name,
+                 "effect": effect})
 
     # -- готовность ----------------------------------------------------
     @property
@@ -110,6 +127,14 @@ class Refs:
 
     def operator_info(self, code) -> dict:
         return self.operators.get(str(code or ""), {})
+
+    def perk_branches(self) -> list[tuple[str, list[dict]]]:
+        """Ветки дерева навыков: [(название ветки, [узлы по порядку])]."""
+        return [(branch["name"], branch["nodes"]) for branch in self.perk_lines.values()]
+
+    def operator_levels(self, code) -> dict[int, list]:
+        """Что открывается у оперативника на каждом уровне карточки."""
+        return self.card_tree.get(str(code or ""), {})
 
     def medal(self, code) -> str:
         if code in (None, ""):

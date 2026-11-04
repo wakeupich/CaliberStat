@@ -178,6 +178,28 @@ CREATE TABLE IF NOT EXISTS ref_item (
 );
 CREATE INDEX IF NOT EXISTS idx_ref_item_kind ON ref_item(kind);
 
+-- дерево навыков: ветки и порядок узлов (технологии клиента)
+CREATE TABLE IF NOT EXISTS ref_perk_line (
+    technology TEXT PRIMARY KEY,
+    line       TEXT,
+    line_name  TEXT,
+    pos        INTEGER,
+    descr      TEXT
+);
+
+-- дерево прокачки оперативника: что открывается на каком уровне карточки
+CREATE TABLE IF NOT EXISTS ref_card_tree (
+    card   TEXT,
+    level  INTEGER,
+    slot   INTEGER,
+    key    TEXT,
+    kind   TEXT,      -- upgrade | tech | slot
+    name   TEXT,
+    effect TEXT,
+    PRIMARY KEY (card, level, slot, key)
+);
+CREATE INDEX IF NOT EXISTS idx_ref_card_tree ON ref_card_tree(card, level);
+
 CREATE TABLE IF NOT EXISTS ref_medal (
     code TEXT PRIMARY KEY,
     name TEXT NOT NULL

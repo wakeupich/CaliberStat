@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -246,7 +247,7 @@ class PlayerCardDialog(QDialog):
     def __init__(self, parent, match: dict, player: dict):
         super().__init__(parent)
         self.setWindowTitle(f"{player.get('nick') or 'игрок'} — карточка боя")
-        self.resize(800, 960)
+        self.resize(900, 1100)
         self.setStyleSheet(STYLE)
 
         outer = QVBoxLayout(self)
@@ -271,6 +272,7 @@ class PlayerCardDialog(QDialog):
         layout.setSpacing(8)
         scroll.setWidget(body)
         outer.addWidget(scroll, 1)
+        self.scroll = scroll
 
         # -- телеметрия ---------------------------------------------------
         layout.addWidget(section_title("Бой"))
@@ -343,6 +345,78 @@ class PlayerCardDialog(QDialog):
         else:
             layout.addWidget(self._note("навыки не сохранились (нет реплея)"))
 
+        # -- дерево навыков -----------------------------------------------
+        branches = refs().perk_branches()
+        if branches and levels:
+            total = sum(len(nodes) for _name, nodes in branches)
+            learned = sum(1 for value in levels.values() if value)
+            layout.addWidget(section_title(
+                f"Дерево навыков · изучено {learned} из {total}"))
+            grid = QGridLayout()
+            grid.setSpacing(8)
+            for index, (line_name, nodes) in enumerate(branches):
+                box = QFrame()
+                box.setObjectName("card")
+                box.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+                box_layout = QVBoxLayout(box)
+                box_layout.setContentsMargins(8, 6, 8, 6)
+                box_layout.setSpacing(4)
+                title = QLabel(f"{line_name} · {len(nodes)}")
+                title.setObjectName("h2")
+                box_layout.addWidget(title)
+                table = make_table(["Навык", "Ур."])
+                table.verticalHeader().setDefaultSectionSize(20)
+                fill_table(table, [[refs().item(node["tech"]),
+                                    levels.get(node["tech"]) or "—"]
+                                   for node in nodes], right=(1,))
+                for row, node in enumerate(nodes):
+                    level = levels.get(node["tech"]) or 0
+                    item = table.item(row, 0)
+                    if item:
+                        item.setForeground(QColor(ACCENT if level else DIM))
+                        if node.get("descr"):
+                            item.setToolTip(node["descr"])
+                    mark = table.item(row, 1)
+                    if mark:
+                        mark.setForeground(QColor(ACCENT if level else DIM))
+                table.setFixedHeight(20 * len(nodes) + 46)
+                box_layout.addWidget(table)
+                box_layout.addStretch(1)
+                grid.addWidget(box, index // 2, index % 2, Qt.AlignTop)
+            layout.addLayout(grid)
+
+        # -- дерево прокачки оперативника ---------------------------------
+        code = player.get("operator_code")
+        levels_map = refs().operator_levels(code) if code else {}
+        my_level = player.get("card_level") or 0
+        if levels_map:
+            layout.addWidget(section_title(
+                f"Прокачка оперативника: {refs().operator(code)} — что на каком уровне"))
+            table = make_table(["Уровень", "Что открывается"])
+            rows = []
+            for level in sorted(levels_map):
+                parts = []
+                for node in levels_map[level]:
+                    text = node["name"] or ""
+                    if node["effect"]:
+                        text += f" {node['effect']}"
+                    parts.append(text or node["key"])
+                rows.append([f"{level}" + (" ✓" if my_level and level <= my_level else ""),
+                             "; ".join(parts)])
+            fill_table(table, rows, right=(0,))
+            for row, level in enumerate(sorted(levels_map)):
+                opened = my_level and level <= my_level
+                for column in (0, 1):
+                    item = table.item(row, column)
+                    if item:
+                        item.setForeground(QColor(ACCENT if opened else DIM))
+            table.setFixedHeight(min(20 * len(rows) + 40, 420))
+            layout.addWidget(table)
+            layout.addWidget(self._note(
+                f"Галочкой отмечены уровни, которые у него уже есть "
+                f"(текущий: {my_level or '—'}). Названия узлов — из клиента, "
+                f"числа — из описания улучшения."))
+
         # -- награды ------------------------------------------------------
         rewards = parent_rewards(parent, match.get("id"), player.get("uid"))
         layout.addWidget(section_title("Награды за бой"))
@@ -359,7 +433,16 @@ class PlayerCardDialog(QDialog):
 
         medals = rewards.get("medals_json")
         if medals:
-            layout.addWidget(self._note(f"Медали: {medals}"))
+            text = str(medals)
+            try:
+                data = json.loads(medals)
+                if isinstance(data, dict):
+                    text = ", ".join(f"{refs().medal(code)} ×{count}"
+                                     for code, count in data.items())
+            except Exception:
+                pass
+            if text and text not in ("{}", "[]"):
+                layout.addWidget(self._note(f"Медали: {text}"))
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
@@ -374,6 +457,11 @@ class PlayerCardDialog(QDialog):
         label.setWordWrap(True)
         label.setObjectName("dim")
         return label
+
+    def scroll_to_end(self) -> None:
+        """Прокрутить карточку вниз (для снимков и проверок)."""
+        bar = self.scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
 
 def replay_slot_title(slot: str) -> str:
@@ -964,6 +1052,8 @@ def main() -> int:
     ap.add_argument("--shot", help="сохранить снимок окна и выйти")
     ap.add_argument("--tab", help="какую вкладку открыть для снимка")
     ap.add_argument("--card", help="сохранить снимок карточки игрока и выйти")
+    ap.add_argument("--bottom", action="store_true",
+                    help="для --card: прокрутить карточку вниз (дерево навыков)")
     args = ap.parse_args()
 
     paths.ensure_dirs()
@@ -982,6 +1072,9 @@ def main() -> int:
         if dialog:
             dialog.show()
             app.processEvents()
+            if args.bottom:
+                dialog.scroll_to_end()
+                app.processEvents()
 
             def finish() -> None:
                 dialog.grab().save(args.card)
