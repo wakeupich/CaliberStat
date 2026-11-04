@@ -14,13 +14,13 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
     QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMainWindow, QMessageBox, QProgressDialog, QPushButton, QScrollArea,
-    QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
-    QTextEdit, QVBoxLayout, QWidget,
+    QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -278,8 +278,6 @@ class PlayerCardDialog(QDialog):
         layout.addWidget(section_title("Бой"))
         stats = make_table(["Показатель", "Значение"])
         stats.setMaximumHeight(190)
-        hits = (player.get("headshots") or 0) + (player.get("body_hits") or 0)
-        accuracy = f"{100 * (player.get('headshots') or 0) / hits:.0f}%" if hits else "—"
         fill_table(stats, [
             ["Убийства игроков", player.get("kills") or 0],
             ["Убийства ботов", player.get("bot_kills") or 0],
@@ -289,8 +287,9 @@ class PlayerCardDialog(QDialog):
             ["Получено урона", int(player.get("damage_received") or 0)],
             ["Лечение", int(player.get("heal") or 0)],
             ["Оживления", player.get("revives") or 0],
-            ["Головы / тело", f"{player.get('headshots') or 0} / {player.get('body_hits') or 0}"],
-            ["Точность в голову", accuracy],
+            ["Попаданий в голову", head_cell(player.get("headshots"),
+                                             player.get("body_hits"))],
+            ["Попаданий в тело", int(player.get("body_hits") or 0)],
             ["Вышел из боя", "да" if player.get("first_leave") else "нет"],
         ], right=(1,))
         layout.addWidget(stats)
@@ -344,46 +343,6 @@ class PlayerCardDialog(QDialog):
             layout.addWidget(table)
         else:
             layout.addWidget(self._note("навыки не сохранились (нет реплея)"))
-
-        # -- дерево навыков -----------------------------------------------
-        branches = refs().perk_branches()
-        if branches and levels:
-            total = sum(len(nodes) for _name, nodes in branches)
-            learned = sum(1 for value in levels.values() if value)
-            layout.addWidget(section_title(
-                f"Дерево навыков · изучено {learned} из {total}"))
-            grid = QGridLayout()
-            grid.setSpacing(8)
-            for index, (line_name, nodes) in enumerate(branches):
-                box = QFrame()
-                box.setObjectName("card")
-                box.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-                box_layout = QVBoxLayout(box)
-                box_layout.setContentsMargins(8, 6, 8, 6)
-                box_layout.setSpacing(4)
-                title = QLabel(f"{line_name} · {len(nodes)}")
-                title.setObjectName("h2")
-                box_layout.addWidget(title)
-                table = make_table(["Навык", "Ур."])
-                table.verticalHeader().setDefaultSectionSize(20)
-                fill_table(table, [[refs().item(node["tech"]),
-                                    levels.get(node["tech"]) or "—"]
-                                   for node in nodes], right=(1,))
-                for row, node in enumerate(nodes):
-                    level = levels.get(node["tech"]) or 0
-                    item = table.item(row, 0)
-                    if item:
-                        item.setForeground(QColor(ACCENT if level else DIM))
-                        if node.get("descr"):
-                            item.setToolTip(node["descr"])
-                    mark = table.item(row, 1)
-                    if mark:
-                        mark.setForeground(QColor(ACCENT if level else DIM))
-                table.setFixedHeight(20 * len(nodes) + 46)
-                box_layout.addWidget(table)
-                box_layout.addStretch(1)
-                grid.addWidget(box, index // 2, index % 2, Qt.AlignTop)
-            layout.addLayout(grid)
 
         # -- дерево прокачки оперативника ---------------------------------
         code = player.get("operator_code")
@@ -462,6 +421,17 @@ class PlayerCardDialog(QDialog):
         """Прокрутить карточку вниз (для снимков и проверок)."""
         bar = self.scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
+
+
+def head_cell(head, body) -> str:
+    """Попадания в голову и их доля: «809 (18,8%)» — как в исходном хабе."""
+    head = int(head or 0)
+    body = int(body or 0)
+    total = head + body
+    if not total:
+        return "—"
+    share = 100.0 * head / total
+    return f"{head} ({share:.1f}%)".replace(".", ",")
 
 
 def replay_slot_title(slot: str) -> str:
@@ -647,7 +617,7 @@ class Hub(QMainWindow):
         bottom_layout.addWidget(section_title("Состав боя"))
         self.roster_table = make_table(
             ["Роль", "Ник", "Оперативник", "Опер.", "Прест.", "Акк.", "Убийств",
-             "Ботов", "Смертей", "Помощь", "Урон", "Головы", "Снаряжение"])
+             "Ботов", "Смертей", "Помощь", "Урон", "Головы", "Тело", "Снаряжение"])
         self.roster_table.doubleClicked.connect(self._open_player_card)
         bottom_layout.addWidget(self.roster_table)
         splitter.addWidget(bottom)
@@ -909,8 +879,6 @@ class Hub(QMainWindow):
 
         rows = []
         for player in players:
-            hits = (player["headshots"] or 0) + (player["body_hits"] or 0)
-            head = f"{100 * (player['headshots'] or 0) / hits:.0f}%" if hits else "—"
             rows.append([
                 role_title(player["role"]), player["nick"] or "—",
                 refs().operator(player.get("operator_code")),
@@ -918,10 +886,13 @@ class Hub(QMainWindow):
                 player.get("prestige") or "—",
                 player.get("account_level") or "—",
                 player["kills"] or 0, player["bot_kills"] or 0, player["deaths"] or 0,
-                player["assists"] or 0, int(player["damage_dealt"] or 0), head,
+                player["assists"] or 0, int(player["damage_dealt"] or 0),
+                head_cell(player["headshots"], player["body_hits"]),
+                int(player["body_hits"] or 0),
                 "есть" if player["has_loadout"] else "—",
             ])
-        fill_table(self.roster_table, rows, right=(3, 4, 5, 6, 7, 8, 9, 10, 11))
+        fill_table(self.roster_table, rows,
+                   right=(3, 4, 5, 6, 7, 8, 9, 10, 11, 12))
 
     def _open_match_from_last(self, index) -> None:
         row = index.row()
