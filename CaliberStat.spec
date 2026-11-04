@@ -10,13 +10,13 @@
 
 a = Analysis(
     ["app.py"],
-    pathex=[],
+    pathex=["tools"],
     binaries=[],
     datas=[],
     hiddenimports=[
         "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets",
         "gui", "collector", "caliber_db", "client_data", "detect", "paths",
-        "queries", "refs", "replays", "replay",
+        "queries", "refs", "replays", "replay", "share_code",
     ],
     hookspath=[],
     hooksconfig={},

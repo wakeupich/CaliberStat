@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools"))
 import caliber_db as db          # noqa: E402
 import client_data                # noqa: E402
 import detect                     # noqa: E402
@@ -31,6 +32,7 @@ import paths                      # noqa: E402
 import queries as q               # noqa: E402
 import refs as refs_mod           # noqa: E402
 import replays as replays_mod     # noqa: E402
+import share_code as share        # noqa: E402  (tools/share_code.py)
 
 ACCENT = "#d6b05a"
 TEXT = "#e8e6e2"
@@ -281,7 +283,20 @@ class PlayerCardDialog(QDialog):
         self.tabs.addTab(self._rewards_tab(), "Награды")
 
         buttons = QHBoxLayout()
-        buttons.addStretch(1)
+        self.code_hint = QLabel("")
+        self.code_hint.setObjectName("dim")
+        self.code_hint.setWordWrap(True)
+        buttons.addWidget(self.code_hint, 1)
+        self.copy_code = QPushButton("Скопировать комплект")
+        self.copy_code.setToolTip(
+            "Собрать код комплекта оперативника из этого боя и положить в буфер обмена.\n"
+            "Дерево прокачки в бою не передаётся — в код идёт первый доступный узел\n"
+            "каждого уровня карточки.")
+        self.copy_code.clicked.connect(self._copy_loadout_code)
+        if not player.get("has_loadout"):
+            self.copy_code.setEnabled(False)
+        buttons.addWidget(self.copy_code)
+        buttons.addSpacing(8)
         close = QPushButton("Закрыть")
         close.clicked.connect(self.accept)
         buttons.addWidget(close)
@@ -518,6 +533,36 @@ class PlayerCardDialog(QDialog):
         layout.addWidget(self._note("Медали: " + text if text else "Медалей за бой нет."))
         return page
 
+    def _copy_loadout_code(self) -> None:
+        """Код комплекта из боя — в буфер обмена, чтобы вставить его в клиенте."""
+        loadout = db_loadout(self, self.match.get("id"), self.player.get("uid"))
+        if not loadout or not loadout.get("operator"):
+            self.code_hint.setText("в этом бою снаряжения нет — код не собрать")
+            return
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            catalog = share_catalog()
+            code, payload, warnings = share.code_from_loadout(loadout, catalog)
+        except Exception as error:          # клиента нет, оперативник неизвестен
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "Комплект", str(error))
+            return
+        QApplication.restoreOverrideCursor()
+
+        QApplication.clipboard().setText(code)
+        inner = payload["1"]
+        text = (f"код скопирован: {len(code)} символов · "
+                f"оружие {len(inner['5'])} · модулей "
+                f"{sum(len(w['1']) for w in inner['5'])} · "
+                f"навыки {len(inner['4'])} · образы {len(inner['3'])} · "
+                f"дерево {len(inner['1'])}")
+        if warnings:
+            text += " · не нашлось: " + "; ".join(warnings)
+        self.code_hint.setText(text)
+        self.code_hint.setToolTip("Вставь в клиенте: «Обмен комплектами» → «Загрузить комплект». "
+                                  f"Код в буфере обмена:\n\n{code}")
+
     def scroll_to_end(self) -> None:
         """Совместимость с ключом --bottom: вкладки прокручивать не нужно."""
         return None
@@ -608,6 +653,17 @@ def parent_rewards(_parent, match_id, uid) -> dict:
         "SELECT * FROM match_rewards WHERE match_id=? AND uid=?",
         (match_id, int(uid))).fetchone()
     return dict(row) if row else {}
+
+
+_SHARE_CATALOG = None
+
+
+def share_catalog():
+    """Списки клиента для сборки кода комплекта: читаются один раз за запуск."""
+    global _SHARE_CATALOG
+    if _SHARE_CATALOG is None:
+        _SHARE_CATALOG = share.load_catalog()
+    return _SHARE_CATALOG
 
 
 # ---------------------------------------------------------------------------
