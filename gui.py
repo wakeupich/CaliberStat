@@ -352,6 +352,64 @@ class PlayerCardDialog(QDialog):
         layout.addStretch(1)
         return page
 
+    # слоты модулей: хвост ключа говорит, куда модуль ставится
+    MODULE_SLOTS = {
+        "top": "Прицел", "front": "Ствол", "back": "Приклад", "mag": "Магазин",
+        "side": "ЛЦУ", "underbarrel": "Подствольник", "pistol_grip": "Рукоять",
+        "grip": "Рукоять", "handguard": "Цевьё", "stock": "Приклад",
+        "muzzle": "Дульный тормоз", "barrel": "Ствол",
+    }
+
+    @classmethod
+    def module_kind(cls, key: str) -> str:
+        tail = str(key).rsplit("_", 1)[-1].lower() if "_" in str(key) else ""
+        return cls.MODULE_SLOTS.get(tail, "Модуль")
+
+    def _weapon_block(self, slot: str, info: dict) -> QFrame:
+        """Оружие отдельной карточкой: модули списком, а не одной длинной строкой."""
+        frame = QFrame()
+        frame.setObjectName("card")
+        box = QVBoxLayout(frame)
+        box.setContentsMargins(12, 10, 12, 10)
+        box.setSpacing(6)
+
+        weapon_name = refs().item(info.get("key"))
+        translated = weapon_name != str(info.get("key"))
+        title = QLabel(f"{replay_slot_title(slot)} · {weapon_name}")
+        title.setObjectName("h2")
+        title.setWordWrap(True)
+        if not translated:
+            title.setStyleSheet(f"color: {DIM};")
+            title.setToolTip("в клиенте нет названия — показываем ключ")
+        box.addWidget(title)
+
+        modules = [m for m in (info.get("modules") or []) if m]
+        if modules:
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(14)
+            grid.setVerticalSpacing(2)
+            for row, key in enumerate(modules):
+                kind = QLabel(self.module_kind(key))
+                kind.setObjectName("dim")
+                kind.setFixedWidth(112)
+                name_text = refs().item(key)
+                name = QLabel(name_text)
+                name.setWordWrap(True)
+                if name_text == str(key):
+                    name.setStyleSheet(f"color: {DIM};")
+                    name.setToolTip("в клиенте нет названия — показываем ключ")
+                grid.addWidget(kind, row, 0, Qt.AlignTop)
+                grid.addWidget(name, row, 1)
+            grid.setColumnStretch(1, 1)
+            box.addLayout(grid)
+        else:
+            box.addWidget(self._note("без модулей"))
+
+        skin = skin_title(info.get("skin"))
+        if skin and skin != "—":
+            box.addWidget(self._note(f"Скин: {skin}"))
+        return frame
+
     def _gear_tab(self) -> QWidget:
         page, layout = self._page()
         loadout = db_loadout(self, self.match.get("id"), self.player.get("uid"))
@@ -362,12 +420,16 @@ class PlayerCardDialog(QDialog):
             layout.addStretch(1)
             return page
 
-        rows = [[replay_slot_title(slot), refs().item(info.get("key")),
-                 ", ".join(refs().item(m) for m in (info.get("modules") or [])) or "—",
-                 skin_title(info.get("skin"))]
-                for slot, info in (loadout.get("weapons") or {}).items()]
-        layout.addWidget(self._table(["Слот", "Оружие", "Модули", "Скин"], rows))
-        layout.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        body = QWidget()
+        box = QVBoxLayout(body)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(10)
+        for slot, info in (loadout.get("weapons") or {}).items():
+            box.addWidget(self._weapon_block(slot, info))
 
         extra = []
         if loadout.get("consumables"):
@@ -378,7 +440,11 @@ class PlayerCardDialog(QDialog):
         if loadout.get("fatality"):
             extra.append("Казнь: " + refs().animation(loadout["fatality"]))
         if extra:
-            layout.addWidget(self._note("\n".join(extra)))
+            note = self._note("\n".join(extra))
+            box.addWidget(note)
+        box.addStretch(1)
+        scroll.setWidget(body)
+        layout.addWidget(scroll, 1)
         return page
 
     def _perks_tab(self) -> QWidget:

@@ -55,7 +55,8 @@ python -m venv .venv
 
 ![Обзор](docs/preview-overview.png)
 ![Матчи и состав боя](docs/preview-matches.png)
-![Карточка игрока](docs/preview-card.png)
+![Карточка игрока: бой](docs/preview-card.png)
+![Карточка игрока: снаряжение](docs/preview-gear.png)
 
 ## Сборка
 
