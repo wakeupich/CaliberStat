@@ -556,7 +556,7 @@ class PlayerCardDialog(QDialog):
                 f"оружие {len(inner['5'])} · модулей "
                 f"{sum(len(w['1']) for w in inner['5'])} · "
                 f"навыки {len(inner['4'])} · образы {len(inner['3'])} · "
-                f"дерево {len(inner['1'])}")
+                f"дерево {len(inner['1'])} (по умолчанию)")
         if warnings:
             text += " · не нашлось: " + "; ".join(warnings)
         self.code_hint.setText(text)
