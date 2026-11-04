@@ -330,6 +330,9 @@ def loadout_of(data: dict) -> dict[int, dict]:
             "operator": (card or {}).get("1"),
             "weapons": weapons,
             "perks": list((card or {}).get("15") or []),
+            # уровни навыков лежат не в карточке, а рядом с игроком (поле 20):
+            # {"booster_pouch": 2, ...} — 0 не взят, 1 и 2 — ступени прокачки
+            "perk_levels": dict(meta.get("20") or {}),
             "consumables": list((card or {}).get("14") or []),
             "skins": list((card or {}).get("9") or []),
             "fatality": (card or {}).get("13"),
