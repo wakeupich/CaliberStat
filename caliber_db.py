@@ -188,6 +188,19 @@ def role_ru(role: Optional[str]) -> str:
     return OPERATOR_ROLES.get(role, role)
 
 
+# Роль зашита в код оперативника последней буквой: seal2014a, 22spn2016g, amfm, ksk2011s.
+# Проверено по скриншоту итогов боя 04.11.2026 (Дамба, Натиск: Подкрепление): 6 из 6
+# совпали — a штурмовик, g поддержка, m медик, s снайпер.
+ROLE_BY_SUFFIX = {"a": "Assault", "g": "Gunner", "m": "Medic", "s": "Sniper"}
+
+
+def role_from_operator_code(code: Optional[str]) -> Optional[str]:
+    """Роль по коду оперативника. Нужна для реплеев: там роли отдельно не приходят."""
+    if not code:
+        return None
+    return ROLE_BY_SUFFIX.get(str(code).strip().lower()[-1:])
+
+
 def _roles_from_teams_json(text: Optional[str]) -> dict:
     """{"ник": "Gunner"} из lobby.teams_json (сохранённая подготовка боя)."""
     if not text:

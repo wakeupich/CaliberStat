@@ -24,8 +24,12 @@ MODE_TO_F4 = {
     "pve": 1,            # Зачистка
     "pve2": 1,           # Зачистка, новая версия
     "pvehard": 3,        # Спецоперация
-    "halloweenonslaught": 33,
+    "halloweenonslaught": 33,   # Тени ужаса
 }
+
+# Семейство «Натиска»: в реплее режим приходит строкой, число бойцов разделяет
+# Легенду (4) и Подкрепление (6).
+ONSLAUGHT_MODES = ("onslaught", "onslaught2", "onslaughtextended")
 
 
 def f4_from_payload(data: dict) -> Optional[int]:
@@ -37,8 +41,9 @@ def f4_from_payload(data: dict) -> Optional[int]:
         return raw
     players = len(inner.get("7") or [])
     mode = str(raw or "").lower()
-    if mode in ("onslaught2", "onslaught"):
-        # Подкрепление — 6 бойцов, Легенда — 4
+    if mode in ONSLAUGHT_MODES:
+        # «onslaughtextended» = «Натиск: Подкрепление» (подтверждено по бою
+        # 04.11.2026 07:46 на карте «Дамба»: в клиенте именно Подкрепление)
         return 37 if players >= 6 else 14
     return MODE_TO_F4.get(mode)
 
@@ -204,6 +209,11 @@ def import_payload(con, data: dict, path: Optional[str] = None,
     try:
         for uid, loadout in loadout_of(data).items():
             db.save_loadout(con, match_id, uid, loadout.get("nick"), loadout)
+            # роль в реплее отдельно не приходит — берём её из кода оперативника
+            role = db.role_from_operator_code(loadout.get("operator"))
+            if role:
+                con.execute("UPDATE match_players SET role=? WHERE match_id=? AND uid=? "
+                            "AND role IS NULL", (role, match_id, uid))
     except Exception:
         pass
     if codes:
