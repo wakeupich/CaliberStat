@@ -17,7 +17,8 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
-    QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+    QLineEdit,
     QMainWindow, QMessageBox, QProgressDialog, QPushButton, QScrollArea,
     QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
     QVBoxLayout, QWidget,
@@ -255,6 +256,10 @@ class PlayerCardDialog(QDialog):
         super().__init__(parent)
         self.match = match
         self.player = player
+        # разобранный код комплекта этого игрока (если его вставили) — из него
+        # берётся его личный выбор узлов дерева: в реплее его нет
+        self.code_payload: dict | None = None
+        self.code_tree: dict[int, str] = {}
         self.setWindowTitle(f"{player.get('nick') or 'игрок'} — карточка боя")
         self.resize(900, 680)
         self.setMinimumSize(720, 460)
@@ -291,11 +296,17 @@ class PlayerCardDialog(QDialog):
         self.copy_code.setToolTip(
             "Собрать код комплекта оперативника из этого боя и положить в буфер обмена.\n"
             "Дерево прокачки в бою не передаётся — в код идёт первый доступный узел\n"
-            "каждого уровня карточки.")
+            "каждого уровня карточки, если не вставлен код игрока.")
         self.copy_code.clicked.connect(self._copy_loadout_code)
         if not player.get("has_loadout"):
             self.copy_code.setEnabled(False)
         buttons.addWidget(self.copy_code)
+        self.paste_code = QPushButton("Вставить код")
+        self.paste_code.setToolTip(
+            "Разобрать код комплекта, который прислал игрок: покажет его настоящий\n"
+            "выбор узлов дерева и подставит его в новый код из боя.")
+        self.paste_code.clicked.connect(self._paste_code)
+        buttons.addWidget(self.paste_code)
         buttons.addSpacing(8)
         close = QPushButton("Закрыть")
         close.clicked.connect(self.accept)
@@ -491,6 +502,7 @@ class PlayerCardDialog(QDialog):
             layout.addStretch(1)
             return page
         my_level = self.player.get("card_level") or 0
+        chosen = self.code_tree or {}
         rows = []
         for level in sorted(levels_map):
             parts = []
@@ -498,14 +510,23 @@ class PlayerCardDialog(QDialog):
                 text = node["name"] or ""
                 if node["effect"]:
                     text += f" {node['effect']}"
-                parts.append(text or node["key"])
+                text = text or node["key"]
+                if chosen.get(level) == node["key"]:
+                    text = "★ " + text
+                parts.append(text)
             rows.append([f"{level}" + (" ✓" if my_level and level <= my_level else ""),
                          "; ".join(parts)])
         layout.addWidget(self._table(["Уровень", "Что открывается"], rows,
                                      right=(0,), wrap=True), 1)
-        layout.addWidget(self._note(
-            f"Галочкой отмечены уровни, которые у него уже есть "
-            f"(текущий: {my_level or '—'}). Названия узлов и числа — из клиента."))
+        note = (f"Галочкой отмечены уровни, которые у него уже есть "
+                f"(текущий: {my_level or '—'}). Названия узлов и числа — из клиента.")
+        if chosen:
+            note += (" ★ — что игрок выбрал на этом уровне (из его кода комплекта): "
+                     "в бою этот выбор не передаётся.")
+        else:
+            note += (" Какой узел игрок выбрал, в реплее не записано — вставь его код "
+                     "комплекта кнопкой «Вставить код», и выбор появится здесь.")
+        layout.addWidget(self._note(note))
         return page
 
     def _rewards_tab(self) -> QWidget:
@@ -533,6 +554,40 @@ class PlayerCardDialog(QDialog):
         layout.addWidget(self._note("Медали: " + text if text else "Медалей за бой нет."))
         return page
 
+    def _paste_code(self) -> None:
+        """Разобрать присланный код: показать выбор узлов игрока и взять его в сборку."""
+        text, ok = QInputDialog.getText(self, "Код комплекта",
+                                        "Вставь код, который прислал игрок:")
+        if not ok or not str(text).strip():
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            catalog = share_catalog()
+            payload = share.decode(text)
+        except Exception as error:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "Код комплекта", f"Код не разобрался: {error}")
+            return
+        QApplication.restoreOverrideCursor()
+
+        operator = catalog.operator(payload.get("0"))
+        self.code_payload = payload
+        self.code_tree = {level: catalog.upgrade(node) for level, node in
+                          enumerate((payload.get("1") or {}).get("1") or [], start=1)}
+        # вкладку «Прокачка» перерисовываем: на ней появляются звёздочки выбора
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index) == "Прокачка":
+                widget = self._levels_tab()
+                self.tabs.removeTab(index)
+                self.tabs.insertTab(index, widget, "Прокачка")
+                self.tabs.setCurrentIndex(index)
+                break
+        hint = (f"код разобран: {operator}, узлов {len(self.code_tree)} · "
+                f"новый код из боя возьмёт этот выбор")
+        if operator != self.player.get("operator_code"):
+            hint += f" (в бою он на {self.player.get('operator_code')})"
+        self.code_hint.setText(hint)
+
     def _copy_loadout_code(self) -> None:
         """Код комплекта из боя — в буфер обмена, чтобы вставить его в клиенте."""
         loadout = db_loadout(self, self.match.get("id"), self.player.get("uid"))
@@ -543,7 +598,13 @@ class PlayerCardDialog(QDialog):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             catalog = share_catalog()
-            code, payload, warnings = share.code_from_loadout(loadout, catalog)
+            # если игрок присылал свой код и оперативник тот же — берём его дерево
+            template = None
+            if self.code_payload and \
+                    catalog.operator(self.code_payload.get("0")) == loadout.get("operator"):
+                template = self.code_payload
+            code, payload, warnings = share.code_from_loadout(loadout, catalog,
+                                                              template=template)
         except Exception as error:          # клиента нет, оперативник неизвестен
             QApplication.restoreOverrideCursor()
             QMessageBox.warning(self, "Комплект", str(error))
@@ -556,7 +617,7 @@ class PlayerCardDialog(QDialog):
                 f"оружие {len(inner['5'])} · модулей "
                 f"{sum(len(w['1']) for w in inner['5'])} · "
                 f"навыки {len(inner['4'])} · образы {len(inner['3'])} · "
-                f"дерево {len(inner['1'])} (по умолчанию)")
+                f"дерево {len(inner['1'])} ({'из его кода' if template else 'по умолчанию'})")
         if warnings:
             text += " · не нашлось: " + "; ".join(warnings)
         self.code_hint.setText(text)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime, timezone
 from typing import Optional
 
 import caliber_db as db
@@ -25,6 +26,7 @@ MODE_TO_F4 = {
     "pve2": 1,           # Зачистка, новая версия
     "pvehard": 3,        # Спецоперация
     "halloweenonslaught": 33,   # Тени ужаса
+    "polygon": 90,       # Полигон (тренировка): своего кода в игре нет, 90 — наш
 }
 
 # Семейство «Натиска»: в реплее режим приходит строкой, число бойцов разделяет
@@ -93,7 +95,8 @@ def read_payload(path: str) -> Optional[dict]:
             continue
         if isinstance(data, dict) and "Log" in data and "Users" in data:
             return data
-    return None
+    # Реплей полигона (тренировочный бой) записан без обёртки
+    return _read_bare(path, text)
 
 
 def player_codes(path: str) -> dict[str, str]:
@@ -162,6 +165,54 @@ def describe(data: dict, codes: Optional[dict[str, str]] = None) -> dict:
 
 # Имя файла реплея: <uuid боя>_<uid игрока>_<дата>_<время>_<номер>_<часть>.bytes
 NAME_UID = re.compile(r"_(\d{3,})_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_")
+
+# Время записи в имени файла: <uuid>_<uid>_<дата>_<время>_<номер>_<часть>.bytes
+NAME_TIME = re.compile(r"_(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})_")
+
+
+def time_from_path(path: str) -> Optional[str]:
+    """Когда записан бой — из имени файла, в UTC (как `ResultTime` игры)."""
+    m = NAME_TIME.search(os.path.basename(path or ""))
+    if not m:
+        return None
+    try:
+        local = datetime.strptime(f"{m.group(1)} {m.group(2)}:{m.group(3)}:{m.group(4)}",
+                                  "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return local.astimezone(timezone.utc).isoformat()
+
+
+def _read_bare(path: str, text: str) -> Optional[dict]:
+    """Реплей полигона: внутри файла только `Data`, без обёртки `Log` и `Users`.
+
+    Такой файл раньше не разбирался вовсе («не протокол боя»), поэтому
+    тренировочные бои не попадали в статистику. Заворачиваем `Data` в обычный
+    протокол — дальше он идёт тем же путём, что и бой.
+    """
+    pos = text.find('{"0":"')
+    if pos < 0:
+        return None
+    blob = _extract_balanced(text, pos)
+    if not blob:
+        return None
+    try:
+        data = json.loads(blob)
+    except Exception:
+        return None
+    if not isinstance(data, dict) or not data.get("7"):
+        return None
+    out = {"Log": {"Data": data}, "Users": []}
+    when = time_from_path(path)
+    if when:
+        out["ResultTime"] = when
+    return out
+
+
+def is_training(data: dict) -> bool:
+    """Тренировочный бой (полигон): в статистику такие файлы не берём."""
+    inner = (data.get("Log") or {}).get("Data") or {}
+    return str(inner.get("4") or "").lower() == "polygon"
 
 
 def my_uid_from_path(path: str) -> Optional[int]:

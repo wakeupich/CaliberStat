@@ -79,7 +79,8 @@ def scan(con, folders: Optional[Iterable[Path]] = None,
     folders = list(folders) if folders is not None else default_folders()
     files = list_replays(folders)
     stats = {"folders": [str(f) for f in folders], "files": len(files), "new": 0,
-             "updated": 0, "failed": 0, "seconds": 0.0, "failed_list": []}
+             "updated": 0, "failed": 0, "training": 0, "seconds": 0.0,
+             "failed_list": []}
     started = time.perf_counter()
 
     for index, path in enumerate(files, 1):
@@ -89,6 +90,10 @@ def scan(con, folders: Optional[Iterable[Path]] = None,
             if not data:
                 stats["failed"] += 1
                 stats["failed_list"].append((str(path), "не протокол боя"))
+            elif replay.is_training(data):
+                # полигон: бой с ботами без соперников, статистику им не портим
+                stats["training"] += 1
+                status = "training"
             else:
                 match_id = str(((data.get("Log") or {}).get("Data") or {}).get("0") or "")
                 existed = bool(match_id) and match_exists(con, match_id)
@@ -118,6 +123,8 @@ def summary_text(stats: dict) -> str:
     """Короткая строка для лога и отчёта в окне."""
     text = (f"файлов: {stats['files']}, новых: {stats['new']}, "
             f"обновлено: {stats['updated']}, не разобрано: {stats['failed']}")
+    if stats.get("training"):
+        text += f", тренировок пропущено: {stats['training']}"
     if stats["folders"]:
         text += f" (папок: {len(stats['folders'])})"
     return text
@@ -183,7 +190,7 @@ class Watcher:
         """Разобрать один файл. Возвращает описание боя или None."""
         try:
             data = replay.read_payload(str(path))
-            if not data:
+            if not data or replay.is_training(data):
                 return None
             match_id = str(((data.get("Log") or {}).get("Data") or {}).get("0") or "")
             existed = bool(match_id) and match_exists(self.con, match_id)
