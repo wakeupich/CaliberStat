@@ -482,12 +482,25 @@ _LOADOUT_CACHE: dict[tuple[str, int], dict] = {}
 
 # окно обращается к базе через эти обёртки: соединение открывается один раз
 _CON: "db.sqlite3.Connection | None" = None
+_DB_PATH: str | None = None
+
+
+def set_db_path(path: str) -> None:
+    """Переключить базу (для снимков и проверок на копии базы)."""
+    global _DB_PATH, _CON
+    _DB_PATH = path
+    if _CON is not None:
+        try:
+            _CON.close()
+        except Exception:
+            pass
+    _CON = None
 
 
 def connection():
     global _CON
     if _CON is None:
-        _CON = db.connect(str(paths.db_path()))
+        _CON = db.connect(_DB_PATH or str(paths.db_path()))
     return _CON
 
 
@@ -1102,6 +1115,7 @@ def main() -> int:
     args = ap.parse_args()
 
     paths.ensure_dirs()
+    set_db_path(args.db)
     app = QApplication(sys.argv[:1])
     app.setStyleSheet(STYLE)
     window = Hub(args.db)
