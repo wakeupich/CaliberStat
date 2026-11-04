@@ -153,6 +153,45 @@ CREATE INDEX IF NOT EXISTS idx_matches_ts ON matches(ts_epoch);
 CREATE INDEX IF NOT EXISTS idx_mp_nick ON match_players(nick);
 CREATE INDEX IF NOT EXISTS idx_mp_uid ON match_players(uid);
 CREATE INDEX IF NOT EXISTS idx_api_endpoint ON api_log(endpoint);
+
+-- справочники из клиента: обновляются кнопкой, а не фоном
+CREATE TABLE IF NOT EXISTS ref_map (
+    key  TEXT PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ref_operator (
+    code          TEXT PRIMARY KEY,   -- код из реплея: ksk2011s
+    operator_id   INTEGER,            -- позиция карточки в клиенте (с единицы)
+    name          TEXT,
+    role          TEXT,
+    collection    TEXT,
+    collection_ru TEXT,
+    enabled       INTEGER DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_ref_operator_id ON ref_operator(operator_id);
+
+CREATE TABLE IF NOT EXISTS ref_item (
+    key  TEXT PRIMARY KEY,            -- fr2_custom, ACOGTA01NSN_top, field_medicine
+    name TEXT NOT NULL,
+    kind TEXT                         -- weapon | module | gear | consumable | skin | perk
+);
+CREATE INDEX IF NOT EXISTS idx_ref_item_kind ON ref_item(kind);
+
+CREATE TABLE IF NOT EXISTS ref_medal (
+    code TEXT PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ref_ribbon (
+    code TEXT PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ref_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 F4_NAMES = {

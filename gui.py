@@ -24,9 +24,11 @@ from PySide6.QtWidgets import (
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import caliber_db as db          # noqa: E402
+import client_data                # noqa: E402
 import detect                     # noqa: E402
 import paths                      # noqa: E402
 import queries as q               # noqa: E402
+import refs as refs_mod           # noqa: E402
 import replays as replays_mod     # noqa: E402
 
 ACCENT = "#d6b05a"
@@ -193,31 +195,15 @@ def paint_results(table: QTableWidget, column: int = 3) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Названия из справочников (пока их нет — показываем как пришло)
+# Названия из справочников клиента (см. refs.py); нет названия — показываем ключ
 # ---------------------------------------------------------------------------
-_REF_CACHE: dict[str, dict] = {}
-
-
-def ref(kind: str, key) -> str:
-    """Название из справочника клиента, если он уже загружен, иначе сам ключ."""
-    if key in (None, ""):
-        return "—"
-    if kind not in _REF_CACHE:
-        try:
-            import json
-            with open(os.path.join(paths.ref_dir(), f"{kind}.json"), encoding="utf-8") as f:
-                _REF_CACHE[kind] = json.load(f) or {}
-        except Exception:
-            _REF_CACHE[kind] = {}
-    info = _REF_CACHE[kind].get(str(key))
-    if isinstance(info, dict):
-        return info.get("name") or str(key)
-    return info or str(key)
+def refs():
+    return refs_mod.get(connection())
 
 
 def map_title(match) -> str:
     value = match["map"] if not isinstance(match, dict) else match.get("map")
-    return ref("maps", value) if value else "—"
+    return refs().map(value) if value else "—"
 
 
 def role_title(role) -> str:
@@ -250,7 +236,7 @@ class PlayerCardDialog(QDialog):
         head.setObjectName("h1")
         outer.addWidget(head)
         sub = QLabel(f"{role_title(player.get('role'))} · "
-                     f"оперативник: {ref('operators', player.get('operator_code'))} · "
+                     f"оперативник: {refs().operator(player.get('operator_code'))} · "
                      f"{map_title(match)} · {q.fmt_dt(q.start_ts(match))}")
         sub.setObjectName("dim")
         outer.addWidget(sub)
@@ -297,9 +283,9 @@ class PlayerCardDialog(QDialog):
             for slot, info in weapons.items():
                 rows.append([
                     replay_slot_title(slot),
-                    ref("items", info.get("key")),
-                    ", ".join(ref("items", m) for m in (info.get("modules") or [])) or "—",
-                    ref("items", info.get("skin")),
+                    refs().item(info.get("key")),
+                    ", ".join(refs().item(m) for m in (info.get("modules") or [])) or "—",
+                    skin_title(info.get("skin")),
                 ])
             if rows:
                 fill_table(table, rows)
@@ -309,12 +295,12 @@ class PlayerCardDialog(QDialog):
             extra = []
             if loadout.get("consumables"):
                 extra.append("Расходники: " + ", ".join(
-                    ref("items", c) for c in loadout["consumables"]))
+                    refs().item(c) for c in loadout["consumables"]))
             if loadout.get("skins"):
                 extra.append("Комплект: " + ", ".join(
-                    ref("items", s) for s in loadout["skins"]))
+                    skin_title(s) for s in loadout["skins"]))
             if loadout.get("fatality"):
-                extra.append("Казнь: " + ref("items", loadout["fatality"]))
+                extra.append("Казнь: " + refs().animation(loadout["fatality"]))
             if extra:
                 note = self._note("\n".join(extra))
                 layout.addWidget(note)
@@ -330,7 +316,7 @@ class PlayerCardDialog(QDialog):
         if perks:
             table = make_table(["Навык", "Уровень"])
             table.setMaximumHeight(150)
-            fill_table(table, [[ref("perks", p), levels.get(p, "—")] for p in perks],
+            fill_table(table, [[refs().item(p), levels.get(p, "—")] for p in perks],
                        right=(1,))
             layout.addWidget(table)
         else:
@@ -372,6 +358,15 @@ class PlayerCardDialog(QDialog):
 def replay_slot_title(slot: str) -> str:
     return {"PrimaryWeapon": "Основное", "SecondaryWeapon": "Второе",
             "HeavyWeapon": "Тяжёлое"}.get(slot, slot)
+
+
+def skin_title(key) -> str:
+    """Скин оружия/комплекта. «Stock_*» — заводской, без кастомного образа."""
+    if not key:
+        return "—"
+    if str(key).startswith("Stock_"):
+        return "заводской"
+    return refs().skin(key)
 
 
 _LOADOUT_CACHE: dict[tuple[str, int], dict] = {}
@@ -596,12 +591,19 @@ class Hub(QMainWindow):
         rescan.clicked.connect(self._rescan_replays)
         data_buttons.addWidget(rescan)
 
-        refs = QPushButton("Обновить справочники из клиента")
-        refs.setEnabled(False)
-        refs.setToolTip("Появится на этапе 4: названия оружия, карт, оперативников")
-        data_buttons.addWidget(refs)
+        self.refs_button = QPushButton("Обновить справочники из клиента")
+        self.refs_button.setToolTip(
+            "Прочитать файлы клиента и обновить названия карт, оружия, "
+            "оперативников и навыков. После патча игры — нажать снова.")
+        self.refs_button.clicked.connect(self._update_refs)
+        data_buttons.addWidget(self.refs_button)
         data_buttons.addStretch(1)
         layout.addLayout(data_buttons)
+
+        self.refs_info = QLabel("—")
+        self.refs_info.setObjectName("dim")
+        self.refs_info.setWordWrap(True)
+        layout.addWidget(self.refs_info)
 
         services = QHBoxLayout()
         autostart = QCheckBox("Автозапуск при входе в Windows")
@@ -613,6 +615,7 @@ class Hub(QMainWindow):
         layout.addStretch(1)
 
         self._load_settings_into_fields()
+        self._update_refs_info()
 
     # -- данные --------------------------------------------------------
     def reload(self) -> None:
@@ -758,7 +761,7 @@ class Hub(QMainWindow):
             head = f"{100 * (player['headshots'] or 0) / hits:.0f}%" if hits else "—"
             rows.append([
                 role_title(player["role"]), player["nick"] or "—",
-                ref("operators", player.get("operator_code")),
+                refs().operator(player.get("operator_code")),
                 player["kills"] or 0, player["bot_kills"] or 0, player["deaths"] or 0,
                 player["assists"] or 0, int(player["damage_dealt"] or 0), head,
                 "есть" if player["has_loadout"] else "—",
@@ -872,6 +875,48 @@ class Hub(QMainWindow):
         finally:
             progress.close()
             self.reload()
+
+    def _update_refs_info(self) -> None:
+        refs = refs_mod.get(connection())
+        if refs.meta.get("updated_at"):
+            self.refs_info.setText(refs.updated_text())
+        else:
+            self.refs_info.setText(
+                "Справочники не загружены: нажми «Обновить справочники из клиента». "
+                "Пока интерфейс показывает ключи из реплеев.")
+
+    def _update_refs(self) -> None:
+        steps = client_data.STEPS
+        progress = QProgressDialog(f"Обновляю справочники (1 из {len(steps)})…",
+                                   None, 0, len(steps), self)
+        progress.setWindowTitle("Справочники из клиента")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        def on_step(index: int, total: int, text: str) -> None:
+            progress.setMaximum(total)
+            progress.setValue(index)
+            progress.setLabelText(f"{index + 1} из {total}: {text}")
+            QApplication.processEvents()
+
+        try:
+            counts = client_data.update(connection(), self.settings, progress=on_step)
+        except client_data.ClientDataError as e:
+            progress.close()
+            QMessageBox.warning(self, "Справочники", str(e))
+            return
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(self, "Справочники",
+                                 f"Не удалось обновить: {type(e).__name__}: {e}")
+            return
+        progress.close()
+        refs_mod.get(connection(), reload=True)
+        self._update_refs_info()
+        self.reload()
+        QMessageBox.information(self, "Справочники",
+                                "Готово.\n\n" + client_data.summary_text(counts))
 
 
 def make_icon() -> QIcon:
