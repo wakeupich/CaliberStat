@@ -1,0 +1,16 @@
+# Код и сборка
+__pycache__/
+*.pyc
+build/
+dist/
+.venv/
+
+# Данные и настройки — живут только на машине
+data/
+logs/
+ref/
+settings.json
+
+# Резервные копии
+*.zip
+*.7z
