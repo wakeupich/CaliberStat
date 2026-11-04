@@ -123,6 +123,77 @@ def summary_text(stats: dict) -> str:
     return text
 
 
+class Watcher:
+    """Слежение за папками реплеев: подхватить бой сразу после того, как игра
+    дописала файл.
+
+    Файл нельзя читать, пока игра в него пишет, поэтому сначала запоминаем размер,
+    а импортируем только когда он перестал меняться (`settle` секунд).
+    Повторно один и тот же файл не разбираем: следим за размером и временем
+    изменения.
+    """
+
+    def __init__(self, con, folders: Optional[Iterable[Path]] = None,
+                 settle: float = 3.0):
+        self.con = con
+        self.folders = list(folders) if folders is not None else None
+        self.settle = settle
+        self.seen: dict[str, tuple[int, float, float]] = {}   # путь -> (размер, mtime, замечен)
+        self.done: set[tuple[str, int, float]] = set()        # уже разобранные версии файла
+
+    def step(self, now: Optional[float] = None) -> list[dict]:
+        """Один проход. Возвращает список импортированных боёв."""
+        now = time.time() if now is None else now
+        folders = self.folders if self.folders is not None else default_folders()
+        imported: list[dict] = []
+        alive: set[str] = set()
+        for path in list_replays(folders):
+            key = str(path)
+            alive.add(key)
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            size, mtime = stat.st_size, stat.st_mtime
+            version = (key, size, mtime)
+            if version in self.done:
+                continue                     # эту версию файла уже разбирали
+            mark = self.seen.get(key)
+            if mark is None:
+                self.seen[key] = (size, mtime, now)
+                continue                     # только что увидели — ждём, пока допишется
+            old_size, old_mtime, first_seen = mark
+            if size != old_size or mtime != old_mtime:
+                self.seen[key] = (size, mtime, now)
+                continue                     # файл ещё меняется
+            if now - first_seen < self.settle:
+                continue
+            result = self._import(path)
+            self.done.add(version)           # больше не трогаем, даже если не разобрался
+            if result:
+                imported.append(result)
+            self.seen[key] = (size, mtime, now)
+        for key in list(self.seen):
+            if key not in alive:
+                self.seen.pop(key, None)     # файл убрали — забываем
+        self.done = {item for item in self.done if item[0] in alive}
+        return imported
+
+    def _import(self, path: Path) -> Optional[dict]:
+        """Разобрать один файл. Возвращает описание боя или None."""
+        try:
+            data = replay.read_payload(str(path))
+            if not data:
+                return None
+            match_id = str(((data.get("Log") or {}).get("Data") or {}).get("0") or "")
+            existed = bool(match_id) and match_exists(self.con, match_id)
+            codes = replay.player_codes(str(path))
+            replay.import_payload(self.con, data, path=str(path), codes=codes)
+            return {"file": path.name, "match_id": match_id, "new": not existed}
+        except Exception:
+            return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Пакетный разбор реплеев CaliberStat")
     ap.add_argument("--scan", action="store_true", help="обойти все папки с реплеями")

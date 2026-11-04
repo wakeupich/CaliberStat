@@ -519,6 +519,7 @@ class Hub(QMainWindow):
         self.settings = paths.load_settings()
         self.my_uid: int | None = None
         self.match_id: str | None = None
+        self.watcher = None
         self.tabs_pages: dict[str, QWidget] = {}
 
         self.setWindowTitle(f"CaliberStat {paths.VERSION}")
@@ -715,10 +716,18 @@ class Hub(QMainWindow):
         layout.addWidget(self.refs_info)
 
         services = QHBoxLayout()
-        autostart = QCheckBox("Автозапуск при входе в Windows")
-        autostart.setEnabled(False)
-        autostart.setToolTip("Появится на этапе 5")
-        services.addWidget(autostart)
+        self.auto_replays_box = QCheckBox("Подхватывать реплеи после боя")
+        self.auto_replays_box.setChecked(bool(self.settings.get("import_replays_auto", True)))
+        self.auto_replays_box.setToolTip(
+            "Как только игра допишет файл реплея, бой сам появится в статистике")
+        self.auto_replays_box.stateChanged.connect(self._toggle_auto_replays)
+        services.addWidget(self.auto_replays_box)
+
+        self.autostart_box = QCheckBox("Автозапуск при входе в Windows")
+        self.autostart_box.setChecked(paths.autostart_enabled())
+        self.autostart_box.setToolTip("Запускает трей со сбором и подхватом реплеев")
+        self.autostart_box.stateChanged.connect(self._toggle_autostart)
+        services.addWidget(self.autostart_box)
         services.addStretch(1)
         layout.addLayout(services)
         layout.addStretch(1)
@@ -727,18 +736,39 @@ class Hub(QMainWindow):
         self._update_refs_info()
 
     # -- данные --------------------------------------------------------
+    def _watcher(self):
+        if self.watcher is None:
+            self.watcher = replays_mod.Watcher(
+                connection(), replays_mod.default_folders(self.settings))
+        return self.watcher
+
     def reload(self) -> None:
         try:
+            picked = self._watch_replays()
             self._reload_accounts()
             self._reload_overview()
             self._reload_matches()
             self._reload_service()
             stats = q.db_stats(connection())
-            self.status.setText(
-                f"боёв {stats['matches']} · игроков {stats['players']} · "
-                f"снаряжений {stats['loadouts']} · ников {stats['nicks']}")
+            if picked:
+                names = ", ".join(item["file"][:32] for item in picked[:3])
+                self.status.setText(f"подхвачено реплеев: {len(picked)} · {names}")
+            else:
+                self.status.setText(
+                    f"боёв {stats['matches']} · игроков {stats['players']} · "
+                    f"снаряжений {stats['loadouts']} · ников {stats['nicks']}")
         except Exception as e:
             self.status.setText(f"ошибка чтения базы: {e}")
+
+    def _watch_replays(self) -> list[dict]:
+        """Подхват новых реплеев: игра дописала файл — сразу в базу."""
+        if not self.settings.get("import_replays_auto", True):
+            return []
+        try:
+            return self._watcher().step()
+        except Exception as e:
+            self.status.setText(f"слежение за реплеями: {e}")
+            return []
 
     def _reload_accounts(self) -> None:
         accounts = q.accounts(connection())
@@ -947,6 +977,7 @@ class Hub(QMainWindow):
         self.settings["game_dir"] = self.game_edit.text().strip()
         self.settings["replays_dir"] = self.replays_edit.text().strip()
         if paths.save_settings(self.settings):
+            self.watcher = None
             self._load_settings_into_fields()
             self.status.setText("настройки сохранены")
 
@@ -987,6 +1018,20 @@ class Hub(QMainWindow):
         finally:
             progress.close()
             self.reload()
+
+    def _toggle_auto_replays(self, _state: int = 0) -> None:
+        self.settings["import_replays_auto"] = self.auto_replays_box.isChecked()
+        paths.save_settings(self.settings)
+        self.watcher = None
+
+    def _toggle_autostart(self, _state: int = 0) -> None:
+        wanted = self.autostart_box.isChecked()
+        if paths.set_autostart(wanted):
+            self.autostart_box.setChecked(paths.autostart_enabled())
+            self.status.setText("автозапуск " + ("включён" if wanted else "выключен"))
+        else:
+            self.autostart_box.setChecked(not wanted)
+            self.status.setText("автозапуск изменить не удалось")
 
     def _update_refs_info(self) -> None:
         refs = refs_mod.get(connection())

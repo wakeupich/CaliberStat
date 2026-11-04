@@ -121,6 +121,52 @@ def autostart_command() -> str:
     return f'"{exe}" "{app_dir() / "app.py"}"'
 
 
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_NAME = "CaliberStat"
+
+
+def autostart_enabled() -> bool:
+    """Прописан ли автозапуск и совпадает ли он с текущей папкой программы."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            value, _type = winreg.QueryValueEx(key, RUN_NAME)
+        return bool(value)
+    except FileNotFoundError:
+        return False
+    except Exception:
+        return False
+
+
+def autostart_stale() -> bool:
+    """Автозапуск есть, но указывает на старое место (папку перенесли)."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            value, _type = winreg.QueryValueEx(key, RUN_NAME)
+    except Exception:
+        return False
+    return str(app_dir()).lower() not in str(value).lower()
+
+
+def set_autostart(enabled: bool) -> bool:
+    """Включить/выключить автозапуск. Возвращает успех записи в реестр."""
+    try:
+        import winreg
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            if enabled:
+                winreg.SetValueEx(key, RUN_NAME, 0, winreg.REG_SZ, autostart_command())
+            else:
+                try:
+                    winreg.DeleteValue(key, RUN_NAME)
+                except FileNotFoundError:
+                    pass
+        return True
+    except Exception as e:
+        print(f"[!] автозапуск не изменился: {e}")
+        return False
+
+
 if __name__ == "__main__":
     ensure_dirs()
     print(f"программа: {app_dir()}")
