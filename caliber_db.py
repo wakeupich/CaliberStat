@@ -210,22 +210,54 @@ CREATE TABLE IF NOT EXISTS ref_ribbon (
     name TEXT NOT NULL
 );
 
+-- Режимы боя из клиента (playlist.json + локализация GAMEMODES_<КЛЮЧ>).
+-- game_id — номер, который игра пишет в лог (поле 4 протокола); он НЕ всегда
+-- совпадает с playlist_id из файла клиента, поэтому храним оба.
+CREATE TABLE IF NOT EXISTS ref_mode (
+    key         TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    playlist_id INTEGER,
+    game_id     INTEGER,
+    mode_type   TEXT,
+    status      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ref_mode_game ON ref_mode(game_id);
+
 CREATE TABLE IF NOT EXISTS ref_meta (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
 """
 
+# Запасные названия режимов: если справочники из клиента ещё не обновляли.
+# Основной источник — таблица ref_mode (обновляется кнопкой из клиента).
 F4_NAMES = {
     1: "Зачистка",
     3: "Спецоперация",
+    6: "Рубеж",
+    13: "Натиск",
     14: "Натиск: Легенда",
+    31: "Спецоперация: Модификаторы",
     33: "Тени ужаса",
     37: "Натиск: Подкрепление",
     # Полигон (тренировка) в игре своего кода не имеет: 90 — наше обозначение,
     # чтобы бой не смешивался с настоящими и отличим был по названию
     90: "Полигон (тренировка)",
 }
+
+
+def mode_name_for(con, f4) -> Optional[str]:
+    """Название режима по номеру из лога: сначала справочник клиента, потом запасной."""
+    if f4 is None:
+        return None
+    try:
+        row = con.execute("SELECT name FROM ref_mode WHERE game_id=? AND name IS NOT NULL",
+                          (int(f4),)).fetchone()
+        if row and row["name"]:
+            return row["name"]
+    except Exception:
+        pass
+    return F4_NAMES.get(f4)
 
 ROLE_NAMES = {
     "-1": "Лидер",
@@ -564,7 +596,7 @@ def save_match(con: sqlite3.Connection, data: dict, source: str = "log") -> Opti
         "ON CONFLICT(id) DO UPDATE SET result_ts=excluded.result_ts, ts_epoch=excluded.ts_epoch, "
         "duration_s=excluded.duration_s, winner_team=excluded.winner_team, "
         "my_uid=excluded.my_uid, my_team=excluded.my_team, source=excluded.source",
-        (match_id, result_ts, ts_epoch, mode, f4, F4_NAMES.get(f4),
+        (match_id, result_ts, ts_epoch, mode, f4, mode_name_for(con, f4),
          inner.get("1"), map_mode, inner.get("6"), inner.get("11"),
          log.get("MatchTimeSeconds"), log.get("MissionStartTime"),
          log.get("WinnerTeamId"), my_uid, None,

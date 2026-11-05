@@ -234,6 +234,24 @@ def import_replay(con, path: str, codes: Optional[dict[str, str]] = None) -> Opt
     return import_payload(con, data, path=path, codes=codes)
 
 
+def mode_from_client(con, key: Optional[str]):
+    """Название и игровой номер режима из справочника клиента (`ref_mode`).
+
+    В реплее режим записан строкой (`onslaughtextended`), поэтому имя берётся
+    прямо из таблицы режимов — без догадок и без правки кода после патча.
+    """
+    if not key:
+        return None, None
+    try:
+        row = con.execute("SELECT name, game_id FROM ref_mode WHERE key=?",
+                          (str(key).lower(),)).fetchone()
+    except Exception:
+        return None, None
+    if not row:
+        return None, None
+    return row["name"], row["game_id"]
+
+
 def import_payload(con, data: dict, path: Optional[str] = None,
                    codes: Optional[dict[str, str]] = None) -> Optional[str]:
     """Заливает уже прочитанный протокол боя.
@@ -244,12 +262,17 @@ def import_payload(con, data: dict, path: Optional[str] = None,
     match_id = db.save_match(con, data, source="replay")
     if not match_id:
         return None
-    # в реплее режим строкой — приводим к числовому коду и заполняем команды
-    f4 = f4_from_payload(data)
-    if f4:
+    # в реплее режим строкой — ищем его в справочнике режимов из клиента
+    inner = (data.get("Log") or {}).get("Data") or {}
+    raw_mode = inner.get("4")
+    mode_key = str(raw_mode).lower() if isinstance(raw_mode, str) else None
+    mode_name, game_id = mode_from_client(con, mode_key)
+    f4 = game_id if game_id is not None else f4_from_payload(data)
+    if f4 or mode_name:
         con.execute("UPDATE matches SET f4=?, mode_name=? WHERE id=?",
-                    (f4, db.F4_NAMES.get(f4), match_id))
-        db.backfill_pve_teams(con)
+                    (f4, mode_name or db.mode_name_for(con, f4), match_id))
+        if f4:
+            db.backfill_pve_teams(con)
     else:
         # режим не опознан: в f4 не должно попасть строкой, иначе в интерфейсе
         # появится режим с именем вроде «onslaughtextended» вместо числа

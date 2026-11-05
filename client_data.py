@@ -392,11 +392,51 @@ def build_ribbons(groups: dict[str, list[str]]) -> dict[str, str]:
     return ribbons
 
 
+# -- режимы боя --------------------------------------------------------------
+# Номера режимов, которые игра пишет в лог (поле `4` протокола боя). Они НЕ
+# совпадают один в один с `PersistentId` из playlist.json: сервер считает свою
+# нумерацию. Значения ниже сверены с историей боёв (1 200+ записей лога).
+MODE_GAME_IDS = {
+    "pve": 1,
+    "pvehard": 3,
+    "pvpve2": 6,
+    "onslaughtnormal": 13,
+    "onslaughthard": 14,
+    "pvehardmutators": 31,
+    "halloweenonslaught": 33,
+    "onslaughtextended": 37,
+    "polygon": 90,      # тренировка: своего номера в игре нет, 90 — наше
+}
+
+
+def build_modes(groups: dict[str, list[str]], data: dict) -> dict[str, dict]:
+    """Режимы боя из клиента: ключ, название, номера и тип.
+
+    Источники — `playlist.json` (ключи, порядок, тип, статус) и локализация
+    `GAMEMODES_<КЛЮЧ>` (человеческое название). После патча игры список
+    обновляется той же кнопкой, без правки кода.
+    """
+    playlist = data.get("playlist.json") or {}
+    modes: dict[str, dict] = {}
+    for key, info in playlist.items():
+        info = info or {}
+        name = pick_ru(groups, f"GAMEMODES_{str(key).upper()}")
+        modes[key] = {
+            "name": clean_text(name) or str(key),
+            "playlist_id": info.get("PersistentId"),
+            "game_id": MODE_GAME_IDS.get(key),
+            "mode_type": info.get("type"),
+            "status": info.get("status"),
+        }
+    return modes
+
+
 # -- запись ----------------------------------------------------------------
 def store(con: sqlite3.Connection, maps: dict, operators: dict, items: dict,
           medals: dict, ribbons: dict, source: str,
           perk_tree: Optional[dict] = None,
-          card_tree: Optional[dict] = None) -> dict:
+          card_tree: Optional[dict] = None,
+          modes: Optional[dict] = None) -> dict:
     """Справочники одной транзакцией: либо всё новое, либо всё старое."""
     con.execute("BEGIN")
     try:
@@ -431,11 +471,19 @@ def store(con: sqlite3.Connection, maps: dict, operators: dict, items: dict,
             "effect) VALUES (?,?,?,?,?,?,?)",
             [(card, level, slot, key, info["kind"], info["name"], info["effect"])
              for (card, level, slot, key), info in (card_tree or {}).items()])
+        con.execute("DELETE FROM ref_mode")
+        con.executemany(
+            "INSERT OR REPLACE INTO ref_mode(key, name, playlist_id, game_id, "
+            "mode_type, status) VALUES (?,?,?,?,?,?)",
+            [(key, info["name"], info["playlist_id"], info["game_id"],
+              info["mode_type"], info["status"])
+             for key, info in (modes or {}).items()])
         for key, value in (("updated_at", str(int(time.time()))),
                            ("source", source),
                            ("maps", str(len(maps))),
                            ("operators", str(len(operators))),
                            ("items", str(len(items))),
+                           ("modes", str(len(modes or {}))),
                            ("perks", str(len(perk_tree or {})))):
             con.execute("INSERT OR REPLACE INTO ref_meta(key, value) VALUES (?,?)",
                         (key, value))
@@ -445,7 +493,8 @@ def store(con: sqlite3.Connection, maps: dict, operators: dict, items: dict,
         raise
     return {"maps": len(maps), "operators": len(operators), "items": len(items),
             "medals": len(medals), "ribbons": len(ribbons),
-            "perks": len(perk_tree or {}), "card_tree": len(card_tree or {})}
+            "perks": len(perk_tree or {}), "card_tree": len(card_tree or {}),
+            "modes": len(modes or {})}
 
 
 def update(con: sqlite3.Connection, cfg: Optional[dict] = None,
@@ -491,17 +540,19 @@ def update(con: sqlite3.Connection, cfg: Optional[dict] = None,
     items = build_items(groups, data)
     medals = build_medals(groups)
     ribbons = build_ribbons(groups)
+    modes = build_modes(groups, data)
     perk_tree = build_perk_tree(groups, data)
     card_tree = build_card_tree(groups, data, items)
 
     step(5)
     counts = {"maps": len(maps), "operators": len(operators), "items": len(items),
               "medals": len(medals), "ribbons": len(ribbons),
-              "perks": len(perk_tree), "card_tree": len(card_tree)}
+              "perks": len(perk_tree), "card_tree": len(card_tree),
+              "modes": len(modes)}
     if not dry_run:
         counts = store(con, maps, operators, items, medals, ribbons,
                        source=f"{Path(static).name} · {Path(assets).parent}",
-                       perk_tree=perk_tree, card_tree=card_tree)
+                       perk_tree=perk_tree, card_tree=card_tree, modes=modes)
 
     # чего не хватает: карты из боёв, для которых клиент не дал названия
     missing = []
@@ -523,6 +574,8 @@ def summary_text(counts: dict) -> str:
     text = (f"карт: {counts['maps']}, оперативников: {counts['operators']}, "
             f"предметов и навыков: {counts['items']}, "
             f"медалей: {counts['medals']}, лент: {counts['ribbons']}")
+    if counts.get("modes"):
+        text += f", режимов боя: {counts['modes']}"
     if counts.get("perks"):
         text += f", узлов дерева навыков: {counts['perks']}"
     if counts.get("card_tree"):

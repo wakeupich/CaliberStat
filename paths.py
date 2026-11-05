@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 APP_TITLE = "CaliberStat"
-VERSION = "0.1.5"
+VERSION = "0.1.6"
 
 SETTINGS_NAME = "settings.json"
 DB_NAME = "caliberstat.db"
